@@ -1,9 +1,9 @@
 #![feature(iter_partition_in_place)]
 
+pub mod config;
 mod events;
 mod points;
 mod track;
-pub mod config;
 
 #[macro_export]
 macro_rules! dprintln {
@@ -13,19 +13,48 @@ macro_rules! dprintln {
     };
 }
 
-use crate::events::{Raw, SyncTracker};
-use esperto::types::Kind;
+#[macro_export]
+macro_rules! regprintln {
+    ($($arg:tt)*) => {
+       #[cfg(not(feature = "tuning"))]
+       ::std::println!($($arg)*)
+    };
+}
+
+#[macro_export]
+macro_rules! errprintln {
+    ($($arg:tt)*) => {
+       #[cfg(not(feature = "tuning"))]
+       ::std::eprintln!($($arg)*)
+    };
+}
+
+use crate::events::{Raw, SyncTracker, WiimoteEvent};
+use clap::Parser;
+use esperto::config::{Action, Combo, ModifierDecl};
 use evdevil::bits::BitSet;
 use evdevil::event::{Abs, EventType, InputEvent, Key, Rel};
 use evdevil::uinput::{AbsSetup, UinputDevice};
 use evdevil::{AbsInfo, Evdev, InputProp};
 use futures::stream::StreamExt;
 use std::collections::HashMap;
+use std::fs::File;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use esperto::types::Kind;
+// use std::time::Instant;
+use crate::config::{Config, OutputCodes, OutputEvent, Slot};
 use tokio;
 use tokio_udev::{AsyncMonitorSocket, MonitorBuilder};
-use udev::Device;
+use track::print_utils;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Args {
+   /// Sets a custom config file
+   #[arg(short, long, value_name = "FILE",value_hint = clap::ValueHint::FilePath)]
+   config: Option<PathBuf>,
+}
 
 async fn handler(key_device: Evdev, ir_device: Evdev, accel_device: Evdev) -> Result<(), std::io::Error> {
    // key_device.grab()?;
@@ -88,6 +117,13 @@ async fn handler(key_device: Evdev, ir_device: Evdev, accel_device: Evdev) -> Re
          Key::KEY_DOWN,
          Key::KEY_LEFT,
          Key::KEY_RIGHT,
+         Key::KEY_SCROLLUP,
+         Key::KEY_SCROLLDOWN,
+         Key::KEY_SCROLLLOCK,
+         Key::KEY_PAGEUP,
+         Key::KEY_PAGEDOWN,
+         Key::BTN_MIDDLE,
+         Key::BTN_WHEEL,
       ])?
       .with_rel_axes([Rel::WHEEL, Rel::HWHEEL])?
       .with_abs_axes([
@@ -103,26 +139,38 @@ async fn handler(key_device: Evdev, ir_device: Evdev, accel_device: Evdev) -> Re
    while let Some(event) = stream.next().await {
       match event {
          Raw::Key(Key::BTN_SOUTH, kind) => {
-            /*dev.write(&[InputEvent::new(
+            dev.write(&[InputEvent::new(
                EventType::KEY,
-               Key::BTN_LEFT.raw(),
+               Key::KEY_PAGEUP.raw(),
                if kind == Kind::Down { 1 } else { 0 },
-            )])?;*/
+            )])?;
          }
          Raw::Key(Key::BTN_SELECT, kind) => {
-            /*dev.write(&[InputEvent::new(
+            dev.write(&[InputEvent::new(
                EventType::KEY,
-               Key::BTN_RIGHT.raw(),
+               Key::KEY_PAGEDOWN.raw(),
                if kind == Kind::Down { 1 } else { 0 },
-            )])?;*/
+            )])?;
+         }
+         Raw::Key(Key::BTN_START, kind) => {
+            dev.write(&[InputEvent::new(
+               EventType::KEY,
+               Key::BTN_MIDDLE.raw(),
+               if kind == Kind::Down { 1 } else { 0 },
+            )])?;
          }
          event @ (Raw::Abs(_, _) | Raw::AccelSyn | Raw::IRSyn) => {
             const MIN_RELIABLE: f32 = 0.23;
             const MAX_RELIABLE: f32 = 0.77;
             const ASPECT_RATIO_Y: f32 = 21.0 / 9.0;
             const ASPECT_RATIO_X: f32 = 9.0 / 9.0;
-            if let Some(dot) = tracker.sync_event(event) {
-               /*dev.write(&[
+
+            // let now = Instant::now();
+            let dot = tracker.sync_event(event);
+            // println!("MAIN: tracking time: {:?}μs", now.elapsed().as_nanos() as f32 / 1000.0);
+
+            if let Some(dot) = dot {
+               dev.write(&[
                   InputEvent::new(
                      EventType::ABS,
                      Abs::X.raw(),
@@ -132,10 +180,10 @@ async fn handler(key_device: Evdev, ir_device: Evdev, accel_device: Evdev) -> Re
                   InputEvent::new(
                      EventType::ABS,
                      Abs::Y.raw(),
-                     ((((1.0 - dot.y) - MIN_RELIABLE) / (MAX_RELIABLE - MIN_RELIABLE) * ASPECT_RATIO_Y) * 4095.0)
+                     (((dot.y - MIN_RELIABLE) / (MAX_RELIABLE - MIN_RELIABLE) * ASPECT_RATIO_Y) * 4095.0)
                         .clamp(0.0, 4095.0) as i32,
                   ),
-               ])?;*/
+               ])?;
             }
          }
          _ => {}
@@ -146,6 +194,20 @@ async fn handler(key_device: Evdev, ir_device: Evdev, accel_device: Evdev) -> Re
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+   // clear screen for tuning
+   print_utils::clear!();
+
+   let args = Args::parse();
+   let mut config: Config = if let Some(config) = args.config {
+      serde_yaml::from_reader(File::open(config)?)?
+   } else {
+      serde_yaml::from_str(include_str!("default.yaml"))?
+   };
+
+   config.validate()?;
+   serde_yaml::to_writer(File::create("default.yaml")?, &config)?;
+   // return Ok(());
+
    // Set up the udev monitor for the "input" subsystem
    let builder = MonitorBuilder::new()?.match_subsystem("input")?;
 
@@ -191,6 +253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
          }
       }
    }
+   regprintln!("Stop waiting for devices, exiting...");
    Ok(())
 }
 
@@ -224,7 +287,7 @@ impl Composite {
    }
 
    async fn update(&mut self, new_node: &Path, sysname: String) {
-      let devices= Evdev::open(new_node)
+      let devices = Evdev::open(new_node)
          .and_then(|dev| dev.name().map(|name| (dev, name)))
          .map(|(dev, name)| {
             // let d = Device::from_syspath(new_node).map(|d| d.devpath().to_owned());
@@ -257,13 +320,13 @@ impl Composite {
             |_| self.matches.get_mut(&sysname),
          );
       if let Some((key_device, ir_device, accel_device)) = devices {
-         async fn run(key_device: Evdev, ir_device: Evdev, accel_device: Evdev) {
+         async fn run(sysname: String, key_device: Evdev, ir_device: Evdev, accel_device: Evdev) {
             if let Err(e) = handler(key_device, ir_device, accel_device).await {
-               dprintln!("Error: {e}");
+               errprintln!("Device {sysname}, {e}");
             }
          }
          if key_device.is_some() && ir_device.is_some() && accel_device.is_some() {
-            tokio::spawn(run(
+            tokio::spawn(run(sysname.clone(),
                key_device.take().unwrap(),
                ir_device.take().unwrap(),
                accel_device.take().unwrap(),

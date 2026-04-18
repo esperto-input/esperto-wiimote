@@ -1,13 +1,14 @@
 use super::{accprintln, dprintln, irprint, irprintln};
 use crate::points::Dot;
 use crate::points::Vec3;
-use crate::track::print_utils::{acc_pane, sensorbar_pane};
+use crate::track::print_utils::{acc_pane, sensorbar_pane, smooth_pane};
 use ordered_float::OrderedFloat;
+use proc_macros::process;
 use std::time::Instant;
 pub use types::RawDot;
-use types::{BarDotGuess, IRState, SensorBar, TWEMA, WEMAV};
+use types::{BarDotGuess, IRState, SensorBar, TWEMA, WEMAV, square};
 
-mod print_utils;
+pub mod print_utils;
 mod types;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -15,68 +16,95 @@ struct ACC {
    gravity: WEMAV,
    smoothed: TWEMA<Vec3>, // you cannot average an angle, but you can average coordinates
    roll: f32,             // roll from accelerometer (rotation) in radians
+   corrected: Dot,
 }
 
 impl ACC {
    fn process(&mut self, data: Vec3) {
-      let dist = (self.smoothed.average - data).norm();
-
-      if dist < GATE_THRESHOLD {
-         // the wiimote is almost not moving, we are measuring gravity
-         // we don't want to compose multiple averages
-         self.gravity.add_value(data.norm());
-      }
-      accprintln!("Acc: Gate value: {:?}", dist);
-      accprintln!("Acc: Gravity value: {:?}", self.gravity.average);
-      accprintln!(
-         "Acc: Gravity standard-deviation: {:?}",
-         self.gravity.standard_deviation()
-      );
-
-      // percentage of gravity, plus standard deviation
-      let acc_threshold = self.gravity.average * ACCELERATION_THRESHOLD + self.gravity.standard_deviation();
-      let dist_threshold = self.gravity.average * ROTATION_THRESHOLD + self.gravity.standard_deviation();
-      accprintln!(
-         "Acc: rot threshold: {}, acc_threshold: {}",
-         dist_threshold,
-         acc_threshold
-      );
+      let old = self.smoothed.average;
 
       // smooth coordinates
       self.smoothed.add_value(data, Instant::now());
       let acc = self.smoothed.average.norm();
-      accprintln!("Acc: Smoothed acceleration value: {:?}", acc);
 
-      if (self.gravity.average - acc).abs() <= acc_threshold && dist <= dist_threshold {
-         // the wiimote is not accelerating excessively (acceleration similar to gravity)
-         // the wiimote is also not quickly rotating
-         self.roll = (-self.smoothed.average.x).atan2(self.smoothed.average.z);
-         accprintln!("Acc: Roll value: {}", self.roll);
+      let dist = (self.smoothed.average - old).norm();
+
+      let gate_test: bool = dist < GATE_THRESHOLD;
+      if gate_test {
+         // the wiimote is almost not moving, we are measuring gravity
+         // we don't want to compose multiple averages
+         self.gravity.add_value(acc);
       }
+      accprintln!("ACC: gate value: {:.3}", dist);
+      accprintln!("ACC: gravity value: {:.3}", self.gravity.average);
+      accprintln!("ACC: gravity standard-deviation: {:.3}", self.gravity.sd());
+      accprintln!("ACC: acceleration difference {:.3}", (self.gravity.average - acc).abs());
+
+      // percentage of gravity, plus standard deviation
+      let acc_threshold = (self.gravity.average + self.gravity.sd()) * ACCELERATION_THRESHOLD;
+      let dist_threshold = (self.gravity.average + self.gravity.sd()) * DIST_THRESHOLD;
+      accprintln!(
+         "ACC: rot threshold: {:.3}, acc_threshold: {:.3}",
+         dist_threshold,
+         acc_threshold
+      );
+      accprintln!("ACC: smoothed acceleration value: {:.3}", acc);
+
+      let acc_tan = ((self.gravity.average - acc).abs() / acc_threshold).tanh();
+      let dist_tan = (dist / dist_threshold).tanh();
+      let alpha = f32::max(acc_tan, dist_tan);
+
+      accprintln!("ACC: acc_tan: {:.3}", acc_tan);
+      accprintln!("ACC: dist_tan: {:.3}", dist_tan);
+      accprintln!("ACC: alpha: {:.3}", alpha);
+
+      self.corrected = (self.corrected * alpha)
+         + (Dot {
+            x: self.smoothed.average.z,
+            y: self.smoothed.average.x,
+         } * (1.0 - alpha));
+      self.roll = -self.corrected.atan2();
+      accprintln!("ACC: roll: {:.3}", self.roll.to_degrees());
+
+      #[cfg(feature = "tuning")]
+      let acc_test: bool = (self.gravity.average - acc).abs() <= acc_threshold;
+      #[cfg(feature = "tuning")]
+      let dist_test: bool = dist <= dist_threshold;
+      acc_pane::line1!(self.gravity.sd(), self.gravity.average, data, gate_test);
+      acc_pane::line2!(acc_threshold, acc, self.smoothed.average, acc_test);
+      acc_pane::line3!(dist_threshold, dist, self.roll, dist_test);
+      acc_pane::status!(acc_test && dist_test);
    }
 }
 
 #[derive(Clone, Copy, Default)]
 struct IR {
    state: IRState,
-   position: Dot, // raw XY coordinate (-512..512, 0 is center)
-   distance: f32, // pixel width of the sensor bar
-   z: f32,        // wiimote to sensor bar distance in meters
+   raw_position: Dot, // raw XY coordinate (0..1, 0.5 is center)
+   // distance: f32,     // pixel width of the sensor bar
+   z: f32, // wiimote to sensor bar distance in meters
    sensorbar: SensorBar,
+   position: Option<Dot>, // smoothed XY coordinate
+   errors_left: u32,      // error count from smoothing algorithm
+   glitch_cnt: u32,       // glitch count from smoothing algorithm
 }
 
 impl IR {
+   fn new() -> Self {
+      IR::default()
+   }
+
    fn find_edge_dot<'a>(&self, raw_dots: &'a [Dot]) -> (usize, &'a Dot) {
       // find the dot closest to the sensor edge
       raw_dots
          .iter()
          .enumerate()
-         .max_by_key(|(_, dot)| OrderedFloat(dot.norm()))
+         .max_by_key(|(_, dot)| OrderedFloat(dot.norm2()))
          .unwrap()
    }
 
    fn track_single_adjust(&mut self, roll: f32, sb: &mut SensorBar, guess: &BarDotGuess) -> bool {
-      sb.align_to(guess.closest, guess.dot);
+      sb.align_guess(&self.sensorbar, guess);
       // compute the raw frame with the inverse rotation
       let raw_dot = sb.other(guess.closest).rotate(-roll);
       if (raw_dot.x.abs() < SB_OFF_SCREEN_X) && (raw_dot.y.abs() < SB_OFF_SCREEN_Y) {
@@ -89,7 +117,7 @@ impl IR {
       true
    }
 
-   fn track_sensorbar(&self, roll: f32, dots: &[Dot], sb: &mut SensorBar) -> bool {
+   fn track_sensorbar(&self, dots: &[Dot], sb: &mut SensorBar) -> bool {
       let mut cand: SensorBar = *sb;
       let mut min_distance = f32::INFINITY;
       let mut found = false;
@@ -102,41 +130,31 @@ impl IR {
             // order the dots leftmost first into cand
             // storing both the raw dots and the accel-rotated dots
             let off_angle = cand.set_order_dots(&dots[first], &dots[second]);
-            // check angle
-            if cand.slope().abs() > MAX_SB_SLOPE.to_radians() {
+            if !cand.angle_check() {
                irprintln!("\tfailed angle check");
                continue;
             }
             irprintln!("\tpassed angle check");
-            // check distance
-            if cand.offset().x < MIN_SB_WIDTH / 1023.0 {
+            if !cand.distance_check() {
                irprintln!("\tfailed distance check");
                continue;
             }
             irprintln!("\tpassed distance check");
+
             // middle dot check. If there's another source somewhere in the
             // middle of this candidate, then this can't be a sensor bar
-            let margin = Dot {
-               x: SB_DOT_CLUSTER_WIDTH,
-               y: SB_DOT_CLUSTER_HEIGHT,
-            } / 2.0
-               / SB_WIDTH
-               * cand.offset().x;
-            if dots.iter().enumerate().any(|(i, dot)| {
-               i != first && i != second && {
-                  let upper = cand.flat_left() + margin;
-                  let lower = cand.flat_right() - margin;
-                  let flat_dot = dot.rotate(off_angle);
-                  flat_dot.x > upper.x && flat_dot.y < upper.y && flat_dot.x < lower.x && flat_dot.y > lower.y
-               }
-            }) {
+            if dots
+               .iter()
+               .enumerate()
+               .any(|(i, dot)| i != first && i != second && !cand.bounds_check(off_angle, dot))
+            {
                irprintln!("\tfailed middle dot check");
                continue;
             }
             irprintln!("\tpassed middle dot check");
             // pick the candidate with the smallest distance
             if cand.offset().x < min_distance {
-               irprintln!("\tnew candidate");
+               irprintln!("\tnew best");
                ind = (first, second);
                min_distance = cand.offset().x;
                *sb = cand;
@@ -144,26 +162,23 @@ impl IR {
             }
          }
       }
-      sensorbar_pane::double(found, ind.0, ind.1, cand.slope(), min_distance);
+      sensorbar_pane::double!(found, ind.0, ind.1, sb.angle(), min_distance);
       found
    }
 
-   fn track(&mut self, raw_dots: &[RawDot; 4], roll: f32) -> bool {
+   fn track(&mut self, roll: f32, raw_dots: &mut [RawDot; 4]) -> bool {
       // count visible dots and populate dots structure
       // dots[] is in -1..1 units for width
-      sensorbar_pane::raw_raw_dots(raw_dots);
-      let mut raw_dots = raw_dots.clone();
       let num_dots = raw_dots.iter_mut().partition_in_place(|dots| dots.is_valid());
-      sensorbar_pane::raw_dots(&raw_dots);
+      sensorbar_pane::raw_dots!(&raw_dots);
 
       if num_dots == 0 {
          if self.state != IRState::DEAD {
             self.state = IRState::LOST;
          }
-         self.position = Dot::default();
-         self.distance = 0.0;
+         self.raw_position = Dot::default();
          self.z = 0.0;
-         sensorbar_pane::lost();
+         sensorbar_pane::lost!();
          return false;
       }
 
@@ -171,18 +186,23 @@ impl IR {
       let raw_dots: [Dot; 4] = raw_dots.map(|raw_dot| raw_dot.into());
       let dots = &raw_dots.map(|dot| dot.rotate(roll))[..num_dots];
       let raw_dots = &raw_dots[..num_dots];
-      sensorbar_pane::dots(raw_dots, dots);
+      sensorbar_pane::dots!(raw_dots, dots);
 
       let mut new_sb = SensorBar::default();
 
-      if self.track_sensorbar(roll, dots, &mut new_sb) {
+      if self.track_sensorbar(dots, &mut new_sb) {
+         irprintln!(
+            "IR: sb d:{:.3} a:{:.3}°",
+            new_sb.flat_distance(),
+            new_sb.angle().to_degrees()
+         );
          self.state = IRState::GOOD;
          self.sensorbar = new_sb;
       } else {
          // no sensor bar candidates, try to work with a lone dot
          irprintln!("IR: no candidates");
          if self.state == IRState::DEAD {
-            sensorbar_pane::dead();
+            sensorbar_pane::dead!();
             irprintln!("IR: no sensor bar reference");
             // we've never seen a sensor bar before, so we're screwed
             return false;
@@ -190,29 +210,85 @@ impl IR {
          irprintln!("IR: track single dot");
          // try to find the dot closest to the previous sensor bar position
          let guess = self.sensorbar.find_closest(dots);
-         if (self.state != IRState::LOST || guess.distance < (SB_SINGLE_ADJUST_DISTANCE / 1023.0).powi(2))
+         if (self.state != IRState::LOST || guess.dist2 < SB_SINGLE_ADJUST_DISTANCE)
             && self.track_single_adjust(roll, &mut new_sb, &guess)
          {
             irprintln!(
                "IR: kept track of single {} dot",
                if guess.closest == 0 { "LEFT" } else { "RIGHT" }
             );
-            #[cfg(feature = "tuning")]
-            sensorbar_pane::single_adjust(guess.i, guess.closest);
+            sensorbar_pane::single_adjust!(guess.i, guess.closest);
             self.sensorbar = new_sb;
          } else {
             irprintln!("IR: adjust skipped");
             let (i, dot) = self.find_edge_dot(raw_dots);
             let bardot = self.sensorbar.align_furthest(dot, roll);
-            sensorbar_pane::single_lost(i, bardot);
+            sensorbar_pane::single_lost!(i, bardot);
          }
          self.state = IRState::SINGLE;
-         sensorbar_pane::single();
+         sensorbar_pane::single!();
       }
-      self.position = self.sensorbar.position();
-      self.distance = self.sensorbar.flat_offset().x * 512.0;
-      self.z = SB_Z_COEFFICIENT / self.distance;
+      self.raw_position = self.sensorbar.flat_avg();
+      self.z = SB_Z_COEFFICIENT / (self.sensorbar.flat_offset().x * 512.0);
       true
+   }
+
+   fn smooth(&mut self, position: &Dot, dist2: f32) {
+      irprint!(
+         "SMT: {}~:{:?} ",
+         self.raw_position,
+         self.position.map_or_else(|| "None".to_string(), |p| p.to_string())
+      );
+      let diff = position.offset(&self.raw_position);
+      if dist2 > SMOOTH_IR_DEADZONE {
+         if dist2 < SMOOTH_IR_RADIUS.powi(2) {
+            self.position = Some(position + diff * SMOOTH_IR_SPEED);
+            irprintln!("inside");
+            smooth_pane::inside!(dist2);
+         } else {
+            let theta = diff.atan2();
+            self.position = Some(
+               self.raw_position
+                  - Dot {
+                     x: theta.cos(),
+                     y: theta.sin(),
+                  } * SMOOTH_IR_RADIUS,
+            );
+            irprintln!("outside");
+            smooth_pane::outside!(dist2);
+         }
+         return;
+      }
+      irprintln!("deadzone");
+      smooth_pane::deadzone!(dist2);
+   }
+
+   fn process(&mut self, roll: f32, raw_dots: &mut [RawDot; 4]) {
+      let raw_valid = self.track(roll, raw_dots);
+
+      if raw_valid {
+         if self.errors_left > 0 {
+            let position = &self.position.unwrap();
+            let dist2 = self.raw_position.distance2(position);
+            if dist2 <= GLITCH_DIST || self.glitch_cnt > GLITCH_MAX_COUNT {
+               self.glitch_cnt = 0;
+               self.smooth(position, dist2);
+            } else {
+               self.glitch_cnt += 1;
+            }
+         } else {
+            self.position = Some(self.raw_position);
+            self.glitch_cnt = 0;
+         }
+         self.errors_left = ERROR_MAX_COUNT;
+      } else {
+         if self.errors_left > 0 {
+            self.errors_left -= 1;
+         } else {
+            self.position = None;
+         }
+      }
+      smooth_pane::counters!(self.errors_left, self.glitch_cnt);
    }
 }
 
@@ -220,140 +296,72 @@ impl IR {
 pub struct Tracker {
    ir: IR,
    acc: ACC,
-   smooth_valid: bool, // is the smoothed position valid?
-   smoothed: Dot,      // smoothed XY coordinate
-   error_cnt: i32,     // error count from smoothing algorithm
-   glitch_cnt: i32,    // glitch count from smoothing algorithm
 }
 
 impl Tracker {
    pub fn new() -> Tracker {
       Tracker {
-         ir: IR::default(),
+         ir: IR::new(),
          acc: ACC::default(),
-         smooth_valid: false,
-         smoothed: Dot::default(),
-         error_cnt: 0,
-         glitch_cnt: ERROR_MAX_COUNT,
       }
    }
 
-   fn apply_smoothing(&mut self) {
-      irprint!(
-         "SMT: ({:.2},{:.2})~({:.2},{:.2}) ",
-         self.ir.position.x,
-         self.ir.position.y,
-         self.smoothed.x,
-         self.smoothed.y
-      );
-      let diff = self.smoothed.offset(&self.ir.position);
-      let dist = diff.norm();
-      if dist > SMOOTH_IR_DEADZONE.powi(2) {
-         if dist < SMOOTH_IR_RADIUS.powi(2) {
-            irprintln!("INSIDE");
-            self.smoothed += diff * SMOOTH_IR_SPEED;
-         } else {
-            irprintln!("OUTSIDE");
-            let theta = diff.y.atan2(diff.x);
-            self.smoothed = self.ir.position
-               - Dot {
-                  x: theta.cos(),
-                  y: theta.sin(),
-               } * SMOOTH_IR_RADIUS;
-         }
-      } else {
-         irprintln!("DEADZONE");
-      }
+   pub fn process_ir_data(&mut self, mut raw_dots: [RawDot; 4]) {
+      sensorbar_pane::begin!();
+      smooth_pane::begin!();
+      self.ir.process(self.acc.roll, &mut raw_dots);
+      sensorbar_pane::end!();
+      smooth_pane::end!();
    }
 
    pub fn process_accelerometer_data(&mut self, data: Vec3) {
-      acc_pane::begin();
+      acc_pane::begin!();
       self.acc.process(
          data
+            // Vec3 { x: -27.57731246399373, y: -32.8657151306604, z: -28.154628797327067 }
             - Vec3 {
-               x: -27.57731246399373,
-               y: -32.8657151306604,
-               z: -28.154628797327067,
+               x: -29.7,
+               y: -34.0,
+               z: -30.0,
             },
       );
-      acc_pane::end();
-   }
-
-   pub fn process_ir_data(&mut self, raw_dots: &[RawDot; 4]) {
-      sensorbar_pane::begin();
-      let raw_valid = self.ir.track(raw_dots, self.acc.roll);
-      sensorbar_pane::end();
-
-      if raw_valid {
-         if self.error_cnt >= ERROR_MAX_COUNT {
-            self.smoothed = self.ir.position;
-            self.glitch_cnt = 0;
-         } else {
-            let dist = self.ir.position.distance(&self.smoothed);
-            if dist > GLITCH_DIST.powi(2) {
-               if self.glitch_cnt > GLITCH_MAX_COUNT {
-                  self.apply_smoothing();
-                  self.glitch_cnt = 0;
-               } else {
-                  self.glitch_cnt += 1;
-               }
-            } else {
-               self.glitch_cnt = 0;
-               self.apply_smoothing();
-            }
-         }
-         self.smooth_valid = true;
-         self.error_cnt = 0;
-      } else {
-         if self.error_cnt >= ERROR_MAX_COUNT {
-            self.smooth_valid = false;
-         } else {
-            self.smooth_valid = true;
-            self.error_cnt += 1;
-         }
-      }
+      acc_pane::end!();
    }
 
    pub fn get_position(&self) -> Option<Dot> {
-      if self.smooth_valid {
-         let smoothed = Dot {
-            x: self.smoothed.x.clamp(0.0, 1.0),
-            y: (1.0 - self.smoothed.y).clamp(0.0, 1.0),
-         };
-         Some(smoothed)
-      } else {
-         None
-      }
+      self.ir.position.as_ref().map(Dot::position)
    }
 }
 
-// half-height of the IR sensor if half-width is 1
-// const HEIGHT: f32 = 384.0 / 512.0;
-
-// maximum sensor bar slope in degrees
-const MAX_SB_SLOPE: f32 = 35.0;
-// minimum sensor bar width in units, relative to half of the IR sensor area
-const MIN_SB_WIDTH: f32 = 100.0;
-
-// physical dimensions
 // cm center to center of emitters
 const SB_WIDTH: f32 = 19.5;
+
 // width in cm of emitters
 const SB_DOT_CLUSTER_WIDTH: f32 = 4.5;
+
 // height in cm of emitters (with some tolerance)
 const SB_DOT_CLUSTER_HEIGHT: f32 = 1.0;
+
+// maximum sensor bar slope in degrees
+#[process(MAX_SB_SLOPE.to_radians())]
+const MAX_SB_SLOPE: f32 = 35.0;
+
+// minimum sensor bar width in units, relative to half of the IR sensor area
+#[process(MIN_SB_WIDTH / 1023.0)]
+const MIN_SB_WIDTH: f32 = 100.0;
 
 // dots further out than these coords are allowed to not be picked up
 // otherwise assume something's wrong
 // disabled, may be doing more harm than good due to sensor pickup glitches
+#[process(SB_OFF_SCREEN_X / 1023.0)]
 const SB_OFF_SCREEN_X: f32 = 0.0;
-//#define SB_OFF_SCREEN_X 0.8f
+#[process(SB_OFF_SCREEN_Y / 1023.0)]
 const SB_OFF_SCREEN_Y: f32 = 0.0;
-//#define SB_OFF_SCREEN_Y (0.8f * HEIGHT)
 
 // if a point is closer than this to one of the previous SB points
 // when it reappears, consider it the same instead of trying to guess
 // which one of the two it is
+#[process(square!(SB_SINGLE_ADJUST_DISTANCE / 1023.0))]
 const SB_SINGLE_ADJUST_DISTANCE: f32 = 100.0;
 
 // width of the sensor bar in pixels at one meter from the Wiimote
@@ -363,27 +371,41 @@ const SB_Z_COEFFICIENT: f32 = 256.0;
 // when the wiimote is at one meter
 // const WIIMOTE_FOV_COEFFICIENT: f32 = 0.39;
 
-const SMOOTH_IR_RADIUS: f32 = 8.0 / 1023.0;
-const SMOOTH_IR_SPEED: f32 = 0.17;
-const SMOOTH_IR_DEADZONE: f32 = 1.7 / 1023.0;
+#[process(SMOOTH_IR_RADIUS / 1023.0)]
+const SMOOTH_IR_RADIUS: f32 = 30.0;
+const SMOOTH_IR_SPEED: f32 = 0.15;
+#[process(square!(SMOOTH_IR_DEADZONE / 1023.0))]
+const SMOOTH_IR_DEADZONE: f32 = 8.0;
 
 // max number of errors before cooked data drops out
-const ERROR_MAX_COUNT: i32 = 8;
+const ERROR_MAX_COUNT: u32 = 1;
+
 // max number of glitches before cooked data updates
-const GLITCH_MAX_COUNT: i32 = 5;
+const GLITCH_MAX_COUNT: u32 = 5;
+
 // squared delta over which we consider something a glitch
-const GLITCH_DIST: f32 = 150.0 / 1023.0;
+#[process(square!(GLITCH_DIST / 1023.0))]
+const GLITCH_DIST: f32 = 150.0;
 
-const TWEMA_WEIGHT_UPPER_BOUND: f32 = 0.8;
+// maximum alpha for twema
+const TWEMA_WEIGHT_UPPER_BOUND: f32 = 0.85;
 
-const TWEMA_WEIGHT_LOWER_BOUND: f32 = 0.1;
+// minimum alpha for twema
+const TWEMA_WEIGHT_LOWER_BOUND: f32 = 0.2;
 
+// time mapped to maximum alpha
 const TWEMA_MAX_ELAPSED_TIME: f32 = 0.25;
 
-const GATE_THRESHOLD: f32 = 3.0;
+// threshold for accepting gravity readings
+const GATE_THRESHOLD: f32 = 1.0;
 
-const ROTATION_THRESHOLD: f32 = 0.1;
+// distance threshold at which rotation readings are almost capped
+// in units of gravity
+const DIST_THRESHOLD: f32 = 0.15;
 
-const ACCELERATION_THRESHOLD: f32 = 0.1;
+// acceleration threshold at which rotation readings are almost capped
+// in units of gravity
+const ACCELERATION_THRESHOLD: f32 = 0.13;
 
+// count for switching to exponential averaging
 const WELFORD_MAX_COUNT: f32 = 30_000.0;

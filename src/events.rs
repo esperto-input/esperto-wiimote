@@ -1,15 +1,15 @@
 use crate::points::{Dot, Vec3};
-use crate::track::Tracker;
 use crate::track::RawDot;
+use crate::track::Tracker;
 use esperto::types::Kind;
+use esperto::types::Scalar;
 use evdevil::event::{Abs, EventKind, Key, KeyState};
 use evdevil::reader::AsyncEvents;
-use frozen_collections::Scalar;
 use futures::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Scalar, Ord, PartialOrd)]
-pub enum WiimoteEvents {
+pub enum WiimoteEvent {
    A,
    B,
    Up,
@@ -23,6 +23,16 @@ pub enum WiimoteEvents {
    Btn2,
    IRAbsX,
    IRAbsY,
+}
+
+impl WiimoteEvent {
+   pub fn is_abs(&self) -> bool {
+      self == &WiimoteEvent::IRAbsX || self == &WiimoteEvent::IRAbsY
+   }
+
+   pub fn is_key(&self) -> bool {
+      !self.is_abs()
+   }
 }
 
 /*fn from_key_event(event: InputEvent) -> Option<Event<WiimoteEvents, f32>> {
@@ -165,7 +175,7 @@ impl SyncTracker {
          }
       } else {
          if self.sync_ir.sync_event(event) {
-            self.tracker.process_ir_data(&self.sync_ir.dots);
+            self.tracker.process_ir_data(self.sync_ir.dots);
             return self.tracker.get_position();
          }
       }

@@ -1,15 +1,11 @@
+use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
+
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Dot {
    pub x: f32,
    pub y: f32,
-}
-
-impl Display for Dot {
-   fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-      write!(f, "({:.3}, {:.3})", self.x, self.y)
-   }
 }
 
 impl Dot {
@@ -25,7 +21,7 @@ impl Dot {
       }
    }
 
-   pub fn slope(&self, dot: &Dot) -> f32 {
+   pub fn angle(&self, dot: &Dot) -> f32 {
       let offset = self.offset(dot);
       offset.y.atan2(offset.x)
    }
@@ -38,13 +34,43 @@ impl Dot {
       self.offset(dot).norm()
    }
 
+   pub fn distance2(&self, dot: &Dot) -> f32 {
+      self.offset(dot).norm2()
+   }
+
    pub fn norm(&self) -> f32 {
+      self.norm2().sqrt()
+   }
+
+   pub fn norm2(&self) -> f32 {
       self.x.powi(2) + self.y.powi(2)
+   }
+
+   pub fn avg(&self, dot: &Dot) -> Dot {
+      (self + dot) / 2.0
+   }
+
+   pub fn atan2(&self) -> f32 {
+      self.y.atan2(self.x)
+   }
+
+   pub fn position(&self) -> Dot {
+      let dot = (self + 1.0) / 2.0;
+      Dot {
+         x: (1.0 - dot.x).clamp(0.0, 1.0),
+         y: dot.y.clamp(0.0, 1.0),
+      }
    }
 
    // pub fn edge_distance(&self) -> f32 {
    //    f32::min(Dot::MAX_WIDTH - self.x.abs(), Dot::MAX_HEIGHT - self.y.abs())
    // }
+}
+
+impl Display for Dot {
+   fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+      write!(f, "({:.3},{:.3})", self.x, self.y)
+   }
 }
 
 impl AddAssign for Dot {
@@ -395,7 +421,7 @@ impl Div<&f32> for &Dot {
    }
 }
 
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, Serialize, Deserialize)]
 pub struct Vec3 {
    pub x: f32,
    pub y: f32,
@@ -404,7 +430,26 @@ pub struct Vec3 {
 
 impl Vec3 {
    pub fn norm(&self) -> f32 {
-      (self.x.powi(2) + self.y.powi(2) + self.z.powi(2)).sqrt()
+      self.norm2().sqrt()
+   }
+   pub fn norm2(&self) -> f32 {
+      self.x.powi(2) + self.y.powi(2) + self.z.powi(2)
+   }
+}
+
+impl Display for Vec3 {
+   fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+      write!(f, "({:.3},{:.3},{:.3})", self.x, self.y, self.z)
+   }
+}
+
+impl From<[f32; 3]> for Vec3 {
+   fn from(v: [f32; 3]) -> Vec3 {
+      Vec3 {
+         x: v[0],
+         y: v[1],
+         z: v[2],
+      }
    }
 }
 

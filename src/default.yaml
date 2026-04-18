@@ -1,0 +1,124 @@
+grab: false
+slots:
+  slot1:
+    name: "Esperto Wiimote mouse"
+  slot2:
+    name: "Esperto Wiimote keyboard"
+    repeating: true
+accelerometer_calibration: [ 29.7,  34.0,  30.0 ]
+screen_limits:
+  north: 4095
+  south: 0
+  west: 0
+  east: 4095
+esperto:
+  modifiers:
+    - name: pointer
+      keys: [ B ]
+    - name: mod1
+      keys: [ Btn1 ]
+  actions:
+    - key: IRAbsX
+      modified:
+        - modifier: pointer
+          action:
+            slot: Slot1
+            code: !Abs ABS_X
+    - key: IRAbsY
+      modified:
+        - modifier: pointer
+          action:
+            slot: Slot1
+            code: !Abs ABS_Y
+    - key: Up
+      action:
+        slot: Slot2
+        code: !Key KEY_UP
+      modified:
+        - modifier: pointer
+          action:
+            slot: Slot2
+            code: !Key KEY_SCROLLUP
+        - modifier: mod1
+          action:
+            slot: Slot2
+            code: !Key KEY_PREVIOUSSONG
+    - key: Down
+      action:
+        slot: Slot2
+        code: !Key KEY_DOWN
+      modified:
+        - modifier: pointer
+          action:
+            slot: Slot2
+            code: !Key KEY_SCROLLDOWN
+        - modifier: mod1
+          action:
+            slot: Slot2
+            code: !Key KEY_NEXTSONG
+    - key: Left
+      action:
+        slot: Slot2
+        code: !Key KEY_LEFT
+      modified:
+        - modifier: pointer
+          action:
+            slot: Slot2
+            code: !Key KEY_HOME
+        - modifier: mod1
+          action:
+            slot: Slot2
+            code: !Key KEY_FASTREVERSE
+    - key: Right
+      action:
+        slot: Slot2
+        code: !Key KEY_RIGHT
+      modified:
+        - modifier: pointer
+          action:
+            slot: Slot2
+            code: !Key KEY_END
+        - modifier: mod1
+          action:
+            slot: Slot2
+            code: !Key KEY_FASTFORWARD
+    - key: A
+      action:
+        slot: Slot2
+        code: !Key KEY_SPACE
+      modified:
+        - modifier: pointer
+          action:
+            slot: Slot1
+            code: !Key BTN_LEFT
+    - key: Plus
+      action:
+        slot: Slot2
+        code: !Key KEY_VOLUMEUP
+      modified:
+        - modifier: pointer
+          action:
+            slot: Slot1
+            code: !Key BTN_MIDDLE
+    - key: Minus
+      action:
+        slot: Slot2
+        code: !Key KEY_VOLUMEDOWN
+      modified:
+        - modifier: pointer
+          action:
+            slot: Slot1
+            code: !Key BTN_RIGHT
+    - key: Home
+      action:
+        slot: Slot2
+        code: !Key KEY_PLAYPAUSE
+      modified:
+    - key: Btn1
+      action:
+        slot: Slot2
+        code: !Key KEY_MUTE
+    - key: Btn2
+      action:
+        slot: Slot2
+        code: !Key KEY_ESC
