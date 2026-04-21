@@ -5,12 +5,16 @@ slots:
   slot2:
     name: "Esperto Wiimote keyboard"
     repeating: true
-accelerometer_calibration: [ 29.7,  34.0,  30.0 ]
+accelerometer_calibration: [ 1.0021962, -0.017654732, 0.0029900372, -0.025536085, 1.0101957, 0.010145217, -0.0096868, -0.0154394, 0.9928987, 28.825405, 34.302845, 30.264385 ]
 screen_limits:
-  north: 4095
-  south: 0
-  west: 0
-  east: 4095
+  north: -2000
+  south: 10355
+  west: -300
+  east: 4395
+#  north: 0
+#  south: 4095
+#  west: 0
+#  east: 4095
 esperto:
   modifiers:
     - name: pointer
@@ -23,13 +27,13 @@ esperto:
         - modifier: pointer
           action:
             slot: Slot1
-            code: !Abs ABS_X
+            code: !Axis ABS_X
     - key: IRAbsY
       modified:
         - modifier: pointer
           action:
             slot: Slot1
-            code: !Abs ABS_Y
+            code: !Axis ABS_Y
     - key: Up
       action:
         slot: Slot2

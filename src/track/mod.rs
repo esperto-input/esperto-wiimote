@@ -1,7 +1,9 @@
 use super::{accprintln, dprintln, irprint, irprintln};
+use crate::config::Config;
 use crate::points::Dot;
 use crate::points::Vec3;
 use crate::track::print_utils::{acc_pane, sensorbar_pane, smooth_pane};
+use nalgebra::{OMatrix, SMatrix, matrix, vector};
 use ordered_float::OrderedFloat;
 use proc_macros::process;
 use std::time::Instant;
@@ -17,10 +19,21 @@ struct ACC {
    smoothed: TWEMA<Vec3>, // you cannot average an angle, but you can average coordinates
    roll: f32,             // roll from accelerometer (rotation) in radians
    corrected: Dot,
+   calibration: SMatrix<f32, 3, 4>,
 }
 
 impl ACC {
+   pub fn new(config: &Config) -> Self {
+      ACC {
+         calibration: SMatrix::<f32, 3, 4>::from_column_slice(&config.accelerometer_calibration),
+         ..ACC::default()
+      }
+   }
+
    fn process(&mut self, data: Vec3) {
+      let data = vector![data.x, data.y, data.z, 1.0];
+      let data = self.calibration * data;
+      let data = Vec3::new(data.x, data.y, data.z);
       let old = self.smoothed.average;
 
       // smooth coordinates
@@ -72,8 +85,8 @@ impl ACC {
       let dist_test: bool = dist <= dist_threshold;
       acc_pane::line1!(self.gravity.sd(), self.gravity.average, data, gate_test);
       acc_pane::line2!(acc_threshold, acc, self.smoothed.average, acc_test);
-      acc_pane::line3!(dist_threshold, dist, self.roll, dist_test);
-      acc_pane::status!(acc_test && dist_test);
+      acc_pane::line3!(dist_threshold, dist, acc_tan, dist_tan, alpha, dist_test);
+      acc_pane::status!(self.roll, acc_test && dist_test);
    }
 }
 
@@ -299,10 +312,10 @@ pub struct Tracker {
 }
 
 impl Tracker {
-   pub fn new() -> Tracker {
+   pub fn new(config: &Config) -> Tracker {
       Tracker {
          ir: IR::new(),
-         acc: ACC::default(),
+         acc: ACC::new(config),
       }
    }
 
@@ -316,14 +329,45 @@ impl Tracker {
 
    pub fn process_accelerometer_data(&mut self, data: Vec3) {
       acc_pane::begin!();
+      // SVD puro
+      // let correction = matrix![
+      //          1.0022228,  -0.0146525735,   -0.008091033 ,     28.390265 ;
+      //   -0.013285754   ,   1.0142968   ,-0.009260553    ,  33.626842 ;
+      // -0.00021422282   ,0.0007917918   ,   0.9951243    ,   28.16185;
+      //        ];
+
+      // soluzione ibrida
+      //     let correction = matrix![
+      //      1.0022228 , -0.0146525735,   -0.008091033,      29.093016 ;
+      //   -0.013285754 ,     1.0142968,   -0.009260553,      33.692974 ;
+      // -0.00021422282 ,  0.0007917918,      0.9951243,      29.718075 ;
+      //     ];
+      // seconda calibrazione
+      /*let correction = matrix![
+         0.010226312,  -0.00026041837, -0.000097612996,      0.29604778;
+      -0.00017977913,     0.010307922,  -0.00015668989,      0.34658885;
+      0.000029927236,  0.000102972146,     0.010124174,      0.29518628;
+        ];
+
+      accprintln!("{}", correction);
+      // let data = data-Vec3 { x: -29.732002, y: -33.8565, z: -29.842999 };
+      let data = vector![data.x, data.y, data.z, 1.0];
+      let corrected = correction * data;
+      let data = Vec3::new(corrected.x, corrected.y, corrected.z);*/
+
       self.acc.process(
-         data
-            // Vec3 { x: -27.57731246399373, y: -32.8657151306604, z: -28.154628797327067 }
-            - Vec3 {
-               x: -29.7,
-               y: -34.0,
-               z: -30.0,
-            },
+         data, // Vec3 { x: -27.57731246399373, y: -32.8657151306604, z: -28.154628797327067 }
+              /*- Vec3 {
+                 x: -29.7,
+                 y: -34.0,
+                 z: -30.0,
+              }*/
+              // - Vec3 { x: -29.049667, y: -33.7915, z: -28.279167 },
+              // - Vec3 { x: -29.732002, y: -33.8565, z: -29.842999 },
+              // - Vec3 { x: -29.731003, y: -33.856403, z: -29.84071 },
+              // - Vec3 { x: -29.049667, y: -33.7915, z: -28.279165 },
+              // - Vec3 { x: -29.220253, y: -33.80775, z: -28.670122 },
+              // - Vec3 { x: -0.70275116, y: -0.06613159, z: -1.5562248 },
       );
       acc_pane::end!();
    }

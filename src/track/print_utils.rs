@@ -5,9 +5,9 @@ use crate::points::Dot;
 #[cfg(feature = "tuning")]
 use crate::points::Vec3;
 #[cfg(feature = "tuning")]
-use crate::track::{ERROR_MAX_COUNT, GLITCH_MAX_COUNT};
-#[cfg(feature = "tuning")]
 use crate::track::types::RawDot;
+#[cfg(feature = "tuning")]
+use crate::track::{ERROR_MAX_COUNT, GLITCH_MAX_COUNT};
 #[cfg(feature = "tuning")]
 use const_format::{concatcp, str_repeat};
 #[cfg(feature = "tuning")]
@@ -77,7 +77,6 @@ impl Command for NewLine {
 fn Newline(x: u16) -> NewLine {
    NewLine { x }
 }
-
 
 #[phantom_pub("tuning", "print_utils")]
 pub fn clear() {
@@ -291,10 +290,17 @@ pub mod acc_pane {
    gen_end!("acc_pane");
 
    #[cfg(feature = "tuning")]
-   pub fn f(a: f32, b: f32, c: Vec3, ok: bool) -> String {
+   fn f(a: f32, b: f32, c: Vec3, is_vec3: bool, ok: bool) -> String {
       let mut s = format!("{:<WIDTH$.3}", a);
       let b = format!("{:7.3} {}", b, if ok { " " } else { "●" });
-      let c = format!("({:+8.3},{:+8.3},{:+8.3})", c.x, c.y, c.z);
+      let c = format!(
+         "{}{:+8.3},{:+8.3},{:+8.3}{}",
+         if is_vec3 { "(" } else { "" },
+         c.x,
+         c.y,
+         c.z,
+         if is_vec3 { ")" } else { "" }
+      );
       s.replace_range(s.len() - c.len()..s.len(), &c);
       s.replace_range(9..9 + b.chars().count(), &b);
       s
@@ -303,30 +309,35 @@ pub mod acc_pane {
    #[phantom_pub("tuning", "acc_pane")]
    pub fn line1(sd: f32, gravity: f32, data: Vec3, ok: bool) {
       queue!(stdout(), MoveTo(X, Y + 1));
-      print!("{}", f(sd, gravity, data, ok));
+      print!("{}", f(sd, gravity, data, true, ok));
    }
 
    #[phantom_pub("tuning", "acc_pane")]
    pub fn line2(acc_treshold: f32, acc: f32, smooth: Vec3, ok: bool) {
       queue!(stdout(), MoveTo(X, Y + 2));
-      print!("{}", f(acc_treshold, acc, smooth, ok));
+      print!("{}", f(acc_treshold, acc, smooth, true, ok));
    }
 
    #[phantom_pub("tuning", "acc_pane")]
-   pub fn line3(dist_treshold: f32, dist: f32, roll: f32, ok: bool) {
+   pub fn line3(dist_treshold: f32, dist: f32, acc_tan: f32, dist_tan: f32, alpha: f32, ok: bool) {
       queue!(stdout(), MoveTo(X, Y + 3));
-      let mut s = format!("{:<WIDTH$.3}", dist_treshold);
-      let dist = format!("{:7.3} {}", dist, if ok { " " } else { "●" });
-      let roll = format!("{:+8.3}°", roll.to_degrees());
-      s.replace_range(s.len() - roll.chars().count()..s.len(), &roll);
-      s.replace_range(9..9 + dist.chars().count(), &dist);
-      print!("{}", s);
+      print!(
+         "{}",
+         f(dist_treshold, dist, Vec3::new(acc_tan, dist_tan, alpha), false, ok)
+      );
    }
 
    #[phantom_pub("tuning", "acc_pane")]
-   pub fn status(status: bool) {
+   pub fn status(roll: f32, status: bool) {
       queue!(stdout(), MoveTo(X, Y + 4));
-      print!("{:^WIDTH$}", if status { "OK" } else { "REJECT" });
+      print!(
+         "{:^WIDTH$}",
+         format!(
+            "{:>6} {:+8.3}°",
+            if status { "OK" } else { "REJECT" },
+            roll.to_degrees()
+         )
+      );
    }
 }
 
@@ -345,11 +356,10 @@ pub mod smooth_pane {
    gen_begin!("smoothing", "smooth_pane");
    gen_end!("smooth_pane");
 
-
    #[phantom_pub("tuning", "smooth_pane")]
    fn smoothing(dist2: f32, mode: &str) {
       queue!(stdout(), MoveTo(X, Y + 3));
-      print!("{:^WIDTH$}", format!("{:4.0} {:8}", dist2.sqrt()*1023.0, mode));
+      print!("{:^WIDTH$}", format!("{:4.0} {:8}", dist2.sqrt() * 1023.0, mode));
    }
 
    #[phantom_pub("tuning", "smooth_pane")]
@@ -370,7 +380,10 @@ pub mod smooth_pane {
    #[phantom_pub("tuning", "smooth_pane")]
    pub fn counters(errors_left: u32, glitch_cnt: u32) {
       queue!(stdout(), MoveTo(X, Y + 1));
-      println!("{:^WIDTH$}", format!("errors: {}/{ERROR_MAX_COUNT}", ERROR_MAX_COUNT - errors_left));
+      println!(
+         "{:^WIDTH$}",
+         format!("errors: {}/{ERROR_MAX_COUNT}", ERROR_MAX_COUNT - errors_left)
+      );
       print!("{:^WIDTH$}", format!("glitch: {}/{GLITCH_MAX_COUNT}", glitch_cnt));
    }
 }

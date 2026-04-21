@@ -429,11 +429,32 @@ pub struct Vec3 {
 }
 
 impl Vec3 {
+   pub fn new(x: f32, y: f32, z: f32) -> Self {
+      Self { x, y, z }
+   }
+
    pub fn norm(&self) -> f32 {
       self.norm2().sqrt()
    }
+
    pub fn norm2(&self) -> f32 {
       self.x.powi(2) + self.y.powi(2) + self.z.powi(2)
+   }
+
+   pub fn abs(&self) -> Vec3 {
+      Vec3 {
+         x: self.x.abs(),
+         y: self.y.abs(),
+         z: self.z.abs(),
+      }
+   }
+
+   pub fn component_mul(&self, other: &Vec3) -> Vec3 {
+      Vec3 {
+         x: self.x * other.x,
+         y: self.y * other.y,
+         z: self.z * other.z,
+      }
    }
 }
 
@@ -445,6 +466,27 @@ impl Display for Vec3 {
 
 impl From<[f32; 3]> for Vec3 {
    fn from(v: [f32; 3]) -> Vec3 {
+      Vec3 {
+         x: v[0],
+         y: v[1],
+         z: v[2],
+      }
+   }
+}
+
+impl From<&[f32; 3]> for Vec3 {
+   fn from(v: &[f32; 3]) -> Vec3 {
+      Vec3 {
+         x: v[0],
+         y: v[1],
+         z: v[2],
+      }
+   }
+}
+
+
+impl From<&[f32]> for Vec3 {
+   fn from(v: &[f32]) -> Vec3 {
       Vec3 {
          x: v[0],
          y: v[1],

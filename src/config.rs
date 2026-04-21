@@ -1,4 +1,3 @@
-use crate::events::WiimoteEvent;
 use crate::regprintln;
 use esperto::combo::ComboHandlerSimple;
 use esperto::types::Event;
@@ -11,11 +10,59 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::ops::Index;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Scalar, Ord, PartialOrd)]
+pub enum WiimoteEvent {
+   A,
+   B,
+   Up,
+   Down,
+   Left,
+   Right,
+   Plus,
+   Minus,
+   Home,
+   Btn1,
+   Btn2,
+   IRAbsX,
+   IRAbsY,
+}
+
+impl WiimoteEvent {
+   pub fn is_axis(&self) -> bool {
+      self == &WiimoteEvent::IRAbsX || self == &WiimoteEvent::IRAbsY
+   }
+
+   pub fn is_key(&self) -> bool {
+      !self.is_axis()
+   }
+}
+
+impl From<Key> for WiimoteEvent {
+   fn from(key: Key) -> Self {
+      match key {
+         Key::BTN_SOUTH => WiimoteEvent::A,
+         Key::BTN_EAST => WiimoteEvent::B,
+         Key::BTN_DPAD_UP => WiimoteEvent::Up,
+         Key::BTN_DPAD_DOWN => WiimoteEvent::Down,
+         Key::BTN_DPAD_LEFT => WiimoteEvent::Left,
+         Key::BTN_DPAD_RIGHT => WiimoteEvent::Right,
+         Key::BTN_START => WiimoteEvent::Plus,
+         Key::BTN_SELECT => WiimoteEvent::Minus,
+         Key::BTN_MODE => WiimoteEvent::Home,
+         Key::BTN_1 => WiimoteEvent::Btn1,
+         Key::BTN_2 => WiimoteEvent::Btn2,
+         _ => {
+            panic!("Unexpected key {:?} received from wiimote", key);
+         }
+      }
+   }
+}
+
 #[derive(Copy, Clone, Debug, Hash, PartialOrd, Ord, Eq, PartialEq, Serialize, Deserialize)]
 pub enum OutputCodes {
-   Abs(Abs),
+   Axis(Abs),
    Key(Key),
-   CustomAbs(u16),
+   CustomAxis(u16),
    CustomKey(u16),
 }
 
@@ -24,15 +71,15 @@ impl OutputCodes {
       matches!(self, Self::Key(_) | Self::CustomKey(_))
    }
 
-   pub fn is_abs(&self) -> bool {
+   pub fn is_axis(&self) -> bool {
       !self.is_key()
    }
 
    pub fn get_raw(self) -> u16 {
       match self {
-         OutputCodes::Abs(raw) => raw.raw(),
+         OutputCodes::Axis(raw) => raw.raw(),
          OutputCodes::Key(raw) => raw.raw(),
-         OutputCodes::CustomAbs(raw) | OutputCodes::CustomKey(raw) => raw,
+         OutputCodes::CustomAxis(raw) | OutputCodes::CustomKey(raw) => raw,
       }
    }
 }
@@ -104,11 +151,21 @@ pub struct ScreenLimits {
 impl Default for ScreenLimits {
    fn default() -> Self {
       ScreenLimits {
-         north: 4095,
-         south: 0,
+         north: 0,
+         south: 4095,
          west: 0,
          east: 4095,
       }
+   }
+}
+
+impl ScreenLimits {
+   pub fn map_x(&self, x: f32) -> i32 {
+      ((x * (self.east - self.west) as f32 + self.west as f32) as i32).clamp(0, 4095)
+   }
+
+   pub fn map_y(&self, y: f32) -> i32 {
+      ((y * (self.south - self.north) as f32 + self.north as f32) as i32).clamp(0, 4095)
    }
 }
 
@@ -165,7 +222,7 @@ impl Default for SensorBarSize {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Smoothing{
+pub struct Smoothing {
    radius: f32,
    speed: f32,
    deadzone: f32,
@@ -181,11 +238,23 @@ impl Default for Smoothing {
    }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Parking {
+   x: i32,
+   y: i32,
+}
+
+impl Default for Parking {
+   fn default() -> Self {
+      Parking { x: 4095, y: 4095 }
+   }
+}
+
 pub type EspertoConfig = esperto::config::Config<WiimoteEvent, OutputEvent>;
 pub type EspertoInput = Event<WiimoteEvent, i32>;
 pub type EspertoOutput = Event<OutputEvent, i32>;
 pub type EventQueue = VecDeque<Event<OutputEvent, i32>>;
-pub type ComboHandler = ComboHandlerSimple<WiimoteEvent, OutputEvent, i32, EventQueue>;
+pub type WiimoteComboHandler = ComboHandlerSimple<WiimoteEvent, OutputEvent, i32, EventQueue>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -194,13 +263,15 @@ pub struct Config {
    #[serde(default = "Default::default")]
    pub slots: Slots,
    #[serde(default = "Default::default")]
-   pub accelerometer_calibration: [f32; 3],
+   pub accelerometer_calibration: [f32; 12],
    #[serde(default = "Default::default")]
    pub screen_limits: ScreenLimits,
    #[serde(default = "Default::default")]
    pub sensor_bar: SensorBarSize,
    #[serde(default = "Default::default")]
    pub smoothing: Smoothing,
+   #[serde(default = "Default::default")]
+   pub parking: Parking,
    pub esperto: EspertoConfig,
 }
 
@@ -259,13 +330,13 @@ impl Config {
          self.esperto.iter_actions().fold(Ok(()), |res, (input, _, output)| {
             res.and_then(|_| {
                if let Some(output) = output {
-                  if input.is_abs() && output.code.is_key() {
+                  if input.is_axis() && output.code.is_key() {
                      return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
                         format!("Config validation failed: cannot map absolut axis {input:?}, to key event {output}",),
                      ));
                   }
-                  if input.is_key() && output.code.is_abs() {
+                  if input.is_key() && output.code.is_axis() {
                      return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
                         format!("Config validation failed: cannot map key {input:?}, to absolute axis {output}",),
