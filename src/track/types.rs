@@ -1,12 +1,12 @@
-use crate::points::Dot;
-use crate::track::print_utils::sensorbar_pane;
+use crate::points::{Dot, DotLike};
 use crate::track::{
-   MAX_SB_SLOPE, MIN_SB_WIDTH, SB_DOT_CLUSTER_HEIGHT, SB_DOT_CLUSTER_WIDTH, SB_WIDTH, TWEMA_MAX_ELAPSED_TIME,
+   MAX_SB_SLOPE, MIN_SB_WIDTH, TWEMA_MAX_ELAPSED_TIME,
    TWEMA_WEIGHT_LOWER_BOUND, TWEMA_WEIGHT_UPPER_BOUND, WELFORD_MAX_COUNT,
 };
-use crate::{dprintln, irprintln};
+use crate::irprintln;
+use nalgebra::vector;
 use ordered_float::OrderedFloat;
-use std::cmp::{max_by_key, min, min_by_key};
+use std::cmp::{max_by_key, min};
 use std::ops::{AddAssign, Mul, MulAssign};
 use std::time::Instant;
 
@@ -94,10 +94,7 @@ impl RawDot {
 
 impl Into<Dot> for RawDot {
    fn into(self) -> Dot {
-      Dot {
-         x: self.x as f32 - 512.0,
-         y: self.y as f32 - 384.0,
-      } / 512.0
+      vector![self.x as f32 - 512.0, self.y as f32 - 384.0,] / 512.0
    }
 }
 
@@ -179,13 +176,8 @@ impl SensorBar {
       self.flat_distance() >= MIN_SB_WIDTH
    }
 
-   pub fn bounds_check(&self, off_angle: f32, dot: &Dot) -> bool {
-      let margin = Dot {
-         x: SB_DOT_CLUSTER_WIDTH,
-         y: SB_DOT_CLUSTER_HEIGHT,
-      } / 2.0
-         / SB_WIDTH
-         * self.offset().x;
+   pub fn bounds_check(&self, off_angle: f32, dot: &Dot, sensorbar_size: &SensorBarSize) -> bool {
+      let margin = vector![sensorbar_size.cluster_width, sensorbar_size.cluster_height,] / 2.0 / sensorbar_size.width * self.offset().x;
       let flat_dot = dot.rotate(off_angle);
       let nw = self.flat_left() + margin;
       let se = self.flat_right() - margin;
@@ -213,7 +205,7 @@ impl SensorBar {
    }
 
    pub fn angle(&self) -> f32 {
-      self.left().angle(self.right())
+      self.left().off_angle(self.right())
    }
 
    pub fn offset(&self) -> Dot {
@@ -223,12 +215,7 @@ impl SensorBar {
    pub fn flat_offset(&self) -> Dot {
       self.flat_left().offset(self.flat_right())
    }
-
-   #[allow(unused)]
-   pub fn distance(&self) -> f32 {
-      self.left().distance2(self.right())
-   }
-
+   
    pub fn flat_distance(&self) -> f32 {
       self.flat_offset().x
    }
@@ -238,7 +225,6 @@ impl SensorBar {
    }
 
    pub fn flat_avg(&self) -> Dot {
-      // (self.flat_left() + self.flat_right() + 2.0) / 4.0
       self.flat_left().avg(self.flat_right())
    }
 
@@ -250,7 +236,10 @@ impl SensorBar {
 }
 
 macro_rules! square {
-    ($arg:expr) => {(($arg)*($arg))};
+   ($arg:expr) => {
+      (($arg) * ($arg))
+   };
 }
 
 pub(crate) use square;
+use crate::config::SensorBarSize;

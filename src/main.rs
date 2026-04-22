@@ -1,38 +1,17 @@
 #![feature(iter_partition_in_place)]
+#![feature(duration_millis_float)]
+extern crate core;
 
 mod calibration;
 pub mod config;
 mod points;
+mod print_utils;
 mod routing;
 mod track;
 
-#[macro_export]
-macro_rules! dprintln {
-    ($($arg:tt)*) => {
-       #[cfg(all(debug_assertions,not(feature = "tuning")))]
-       ::std::println!($($arg)*)
-    };
-}
-
-#[macro_export]
-macro_rules! regprintln {
-    ($($arg:tt)*) => {
-       #[cfg(not(feature = "tuning"))]
-       ::std::println!($($arg)*)
-    };
-}
-
-#[macro_export]
-macro_rules! errprintln {
-    ($($arg:tt)*) => {
-       #[cfg(not(feature = "tuning"))]
-       ::std::eprintln!($($arg)*)
-    };
-}
-
+use std::cell::RefCell;
 // use std::time::Instant;
 use crate::config::Config;
-use crate::points::Vec3;
 use crate::routing::device_handler;
 use clap::Parser;
 use evdevil::Evdev;
@@ -40,11 +19,10 @@ use futures::stream::StreamExt;
 use routing::DeviceMatcher;
 use std::fs::File;
 use std::path::PathBuf;
+use std::process::Command;
 use std::rc::Rc;
-use nalgebra::Storage;
 use tokio;
 use tokio_udev::{AsyncMonitorSocket, MonitorBuilder};
-use track::print_utils;
 use udev::{Device, Enumerator};
 
 #[derive(Parser)]
@@ -61,62 +39,58 @@ struct Args {
 
 #[tokio::main(flavor = "local")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-   // clear screen for tuning
-   print_utils::clear!();
-
-   let calibration = calibration::optimize(
-      Vec3::new( 67.944, -32.606, -26.832),
-      Vec3::new(-127.707, -36.005, -26.209),
-      Vec3::new(-27.998, 62.078, -30.509),
-      Vec3::new(-32.917,-131.999, -28.507),
-      Vec3::new(-28.999, -32.979, 68.561),
-      Vec3::new(-30.950, -36.000,-128.799),
-   );
-   regprintln!(
-      "{:?}",
-      calibration
-      /*calibration::optimize(
-         Vec3::new(68.062, -32.436, -26.039),
-         Vec3::new(-127.526, -35.000, -26.121),
-         Vec3::new(-27.174, 62.780, -28.992),
-         Vec3::new(-30.000, -130.493, -28.837),
-         Vec3::new(-28.000, -32.893, 68.559),
-         Vec3::new(-29.660, -34.707, -128.245),
-      )*/
-   );
-
    let args = Args::parse();
-   let mut config: Config = if let Some(config) = args.config {
+   let config: Config = if let Some(config) = &args.config {
       serde_yaml::from_reader(File::open(config)?)?
    } else {
       serde_yaml::from_str(include_str!("default.yaml"))?
    };
 
-   config.accelerometer_calibration = *calibration.as_slice().as_array().unwrap();
-
    config.validate()?;
    serde_yaml::to_writer(File::create("default.yaml")?, &config)?;
-   let config = Rc::new(config);
-   // return Ok(());
+   let mut config = Rc::new(config);
 
-   regprintln!("Monitoring for input devices...");
+   println!("Monitoring for input devices...");
    let mut connected_devices = udev::Enumerator::new()?;
    connected_devices.match_subsystem("input")?;
    let builder = MonitorBuilder::new()?.match_subsystem("input")?;
    let monitor = builder.listen()?;
    let hotplug_devices = AsyncMonitorSocket::new(monitor)?;
-   let mut enumerator = device_enumerator(&mut connected_devices, hotplug_devices)?;
+   let enumerator = device_enumerator(&mut connected_devices, hotplug_devices)?;
    tokio::pin!(enumerator);
 
    let mut matcher = DeviceMatcher::new();
+   let counter = RefCell::new(0);
 
    while let Some(device) = enumerator.next().await {
       if let Some((name, key_device, ir_device, accel_device)) = matcher.new_device(device) {
-         tokio::task::spawn_local(run(config.clone(), name, (key_device, ir_device, accel_device)));
+         if args.calibration {
+            let affine_matrix = calibration::calibrate(accel_device).await?;
+            let accelerometer_calibration: [f32; 12] = *affine_matrix.as_slice().as_array().unwrap();
+            if let Some(file) = args.config {
+               let config: &mut Config = Rc::make_mut(&mut config);
+               config.accelerometer_calibration = accelerometer_calibration;
+               serde_yaml::to_writer(File::create(file.clone())?, config)?;
+               println!("\n\nCalibration written to file: {:?}", file);
+            } else {
+               println!("\n\naccelerometer_calibration: {:?}", accelerometer_calibration);
+            }
+            return Ok(());
+         }
+
+         // clear screen for tuning
+         #[cfg(feature = "tuning")]
+         print_utils::clear();
+         tokio::task::spawn_local(run(
+            counter.clone(),
+            config.clone(),
+            name,
+            (key_device, ir_device, accel_device),
+         ));
       }
    }
 
-   regprintln!("Stop waiting for devices, exiting...");
+   println!("Stop waiting for devices, exiting...");
    Ok(())
 }
 
@@ -127,21 +101,51 @@ fn device_enumerator(
    Ok(futures::stream::unfold(
       (connected.scan_devices()?, hotplug),
       |(mut connected, mut hotplug)| async {
-         if let Some(dev) = connected.next() {
-            Some((dev, (connected, hotplug)))
-         } else if let Some(Ok(event)) = hotplug.next().await
-            && event.event_type() == tokio_udev::EventType::Add
-         {
-            Some((event.device(), (connected, hotplug)))
-         } else {
-            None
+         loop {
+            if let Some(dev) = connected.next() {
+               break Some((dev, (connected, hotplug)))
+            } else if let Some(Ok(event)) = hotplug.next().await {
+               if event.event_type() == tokio_udev::EventType::Add {
+                  break Some((event.device(), (connected, hotplug)))
+               } else {
+                  continue;
+               }
+            } else {
+               break None
+            }
          }
       },
    ))
 }
 
-async fn run(config: Rc<Config>, sysname: String, devices: (Evdev, Evdev, Evdev)) {
+async fn run(counter: RefCell<u32>, config: Rc<Config>, sysname: String, devices: (Evdev, Evdev, Evdev)) {
+   if *counter.borrow() == 0
+      && let Some(ref command) = config.on_connect
+   {
+      match Command::new(command[0].to_owned()).args(&command[1..]).output() {
+         Ok(output) => {
+            println!("on_connect executed successfully: {}", output.status);
+         }
+         Err(output) => {
+            println!("on_connect failed execution: {}", output);
+         }
+      }
+   }
+   counter.replace_with(|n| *n + 1);
    if let Err(e) = device_handler(&config, &sysname, devices).await {
-      errprintln!("Device {sysname}, {e}");
+      eprintln!("Device {sysname}, {e}");
+   }
+   counter.replace_with(|n| *n - 1);
+   if *counter.borrow() == 0
+      && let Some(ref command) = config.on_disconnect
+   {
+      match Command::new(command[0].to_owned()).args(&command[1..]).output() {
+         Ok(output) => {
+            println!("on_disconnect executed successfully: {}", output.status);
+         }
+         Err(output) => {
+            println!("on_disconnect failed execution: {}", output);
+         }
+      }
    }
 }

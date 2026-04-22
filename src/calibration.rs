@@ -1,103 +1,155 @@
 use crate::points::Vec3;
-use crate::regprintln;
-use nalgebra::{Matrix, Matrix4x3, OMatrix, SMatrix, U3, U4, matrix, vector};
-const EPSILON: f32 = f32::EPSILON;
+use crate::print_utils;
+use crate::print_utils::calibration_pane;
+use crate::routing::{make_abs_stream, Raw, SyncAccelEvents};
+use crossterm::event;
+use evdevil::Evdev;
+use futures::StreamExt;
+use nalgebra::{matrix, vector, Matrix3x4, Matrix4x3, SMatrix};
+use std::time::{Duration, Instant};
 
-#[derive(Default)]
-pub struct Welford3 {
-   pub average: Vec3,
-   pub deviations: Vec3,
-   count: f32,
+struct TWEMA {
+   pub averages: Vec3,
+   pub variances: Vec3,
+   pub last: Instant,
 }
 
-impl Welford3 {
-   pub fn add_value(&mut self, value: Vec3) {
-      let old_average = self.average;
-      self.count += 1.0;
+impl TWEMA {
+   pub const TAU: f32 = Duration::from_secs(10).as_millis_f32();
 
-      self.average += (value - self.average) / (self.count);
-      self.deviations += (value - old_average).component_mul(&(value - self.average));
+   pub fn new(now: Instant, initial: Vec3) -> Self {
+      TWEMA {
+         averages: initial,
+         variances: Default::default(),
+         last: now,
+      }
    }
 
-   pub fn average(&self) -> Vec3 {
-      self.average
+   pub fn add_value(&mut self, value: Vec3, now: Instant) {
+      let old_average = self.averages;
+
+      let w = (-now.duration_since(self.last).as_millis_f32() / TWEMA::TAU)
+         .exp()
+         .clamp(0.0, 1.0);
+      self.last = now;
+
+      self.averages = self.averages * w + value * (1.0 - w);
+      self.variances = self.variances * w + (value - old_average).component_mul(&(value - self.averages)) * (1.0 - w);
    }
 
-   pub fn variance(&self) -> Vec3 {
-      self.deviations / self.count
+   pub fn sd(&self) -> Vec3 {
+      self.variances.map(f32::sqrt)
    }
 }
 
-pub fn symmetrize(pos_x: Vec3, neg_x: Vec3, pos_y: Vec3, neg_y: Vec3, pos_z: Vec3, neg_z: Vec3) -> Vec3 {
-   let mut diffs = [0.0; 6];
-   let mut norm_diffs = [0.0; 6];
-   let mut norms = [
-      pos_z.norm(),
-      neg_z.norm(),
-      pos_x.norm(),
-      neg_x.norm(),
-      pos_y.norm(),
-      neg_y.norm(),
-   ];
-   let zero_offset = Vec3 {
-      x: (pos_z.x + neg_z.x + pos_y.x + neg_y.x) / 4.0,
-      y: (pos_z.y + neg_z.y + pos_x.y + neg_x.y) / 4.0,
-      z: (pos_x.z + neg_x.z + pos_y.z + neg_y.z) / 4.0,
-   };
-   let mut average: f32;
-   let mut score = norms.iter().sum::<f32>();
-   let mut old_score = score * 1.1;
-   let mut offset = Vec3::default(); //zero_offset;
-   regprintln!("score: {:?}, old_score: {:?}", score, old_score);
-
-   while old_score - score > EPSILON {
-      regprintln!("\nnew iteration");
-      let mut norms = [
-         (pos_z - offset).norm(),
-         (neg_z - offset).norm(),
-         (pos_x - offset).norm(),
-         (neg_x - offset).norm(),
-         (pos_y - offset).norm(),
-         (neg_y - offset).norm(),
-      ];
-      regprintln!("norms: {:?}", norms);
-      average = norms.iter().sum::<f32>() / 6.0;
-      regprintln!("average: {:?}", average);
-      // norm_diffs = norms.map(|n| n - average);
-      norm_diffs[0] = norms[0] - norms[1];
-      norm_diffs[1] = norms[1] - norms[0];
-      norm_diffs[2] = norms[2] - norms[3];
-      norm_diffs[3] = norms[3] - norms[2];
-      norm_diffs[4] = norms[4] - norms[5];
-      norm_diffs[5] = norms[5] - norms[4];
-      regprintln!("norm_diffs: {:?}", norm_diffs);
-      old_score = score;
-      score = norm_diffs.map(f32::abs).iter().sum();
-      regprintln!("score: {:?}, old_score: {:?}", score, old_score);
-
-      diffs[0] = pos_z.z - norm_diffs[0];
-      diffs[1] = neg_z.z - norm_diffs[1];
-      diffs[2] = pos_x.x - norm_diffs[2];
-      diffs[3] = neg_x.x - norm_diffs[3];
-      diffs[4] = pos_y.y - norm_diffs[4];
-      diffs[5] = neg_y.y - norm_diffs[5];
-
-      regprintln!("diffs: {:?}", diffs);
-
-      let opposing_offset = Vec3 {
-         x: (diffs[2] + diffs[3]) / 2.0,
-         y: (diffs[4] + diffs[5]) / 2.0,
-         z: (diffs[0] + diffs[1]) / 2.0,
-      };
-      offset = opposing_offset / 1.0;
-
-      regprintln!("offset: {:?}", offset);
-   }
-
-   offset
+#[repr(usize)]
+#[derive(Copy, Clone, Debug)]
+pub enum Position {
+   PosX = 0,
+   NegX = 1,
+   PosY = 2,
+   NegY = 3,
+   PosZ = 4,
+   NegZ = 5,
 }
 
-pub fn optimize(pos_x: Vec3, neg_x: Vec3, pos_y: Vec3, neg_y: Vec3, pos_z: Vec3, neg_z: Vec3) -> OMatrix<f32, U3, U4> {
+struct Calibrate {
+   start_time: Instant,
+   averages: TWEMA,
+}
+
+impl Calibrate {
+   const THRESHOLD: f32 = 1.4;
+
+   pub fn sample(&mut self, new: Vec3) -> Option<Vec3> {
+      calibration_pane::begin();
+
+      self.averages.add_value(new, Instant::now());
+      let sds = self.averages.sd();
+      let sd = sds.max();
+
+      let elapsed = self.averages.last.duration_since(self.start_time).as_millis_f32();
+      if elapsed <= TWEMA::TAU {
+         calibration_pane::warming_up(10 - (elapsed * 10.0 / TWEMA::TAU) as i32);
+         calibration_pane::end();
+         return None;
+      }
+
+      let progress = 20 - ((sd - Self::THRESHOLD).sqrt().clamp(0.0, 3.0) * (20.0 / 3.0)) as usize;
+      calibration_pane::progress(progress);
+      calibration_pane::sds(sds);
+      calibration_pane::avgs(self.averages.averages);
+      calibration_pane::end();
+
+      if sd < Self::THRESHOLD {
+         return Some(self.averages.averages);
+      }
+      None
+   }
+}
+
+pub async fn process(accel_device: Evdev, position: Position) -> Result<(Evdev, Vec3), Box<dyn std::error::Error>> {
+   calibration_pane::splash(position);
+   while !event::read()?.is_key_press() {}
+
+   let mut reader = accel_device.into_reader()?;
+   'a: {
+      let mut raw_stream = make_abs_stream(reader.async_events()?, Raw::AccelSyn).boxed();
+      let sync = SyncAccelEvents::new();
+      let stream = sync.to_stream(&mut raw_stream);
+      tokio::pin!(stream);
+
+      let mut cal;
+
+      if let Some(event) = stream.next().await {
+         let now = Instant::now();
+         cal = Calibrate {
+            start_time: now,
+            averages: TWEMA::new(now, event),
+         };
+         loop {
+            if let Some(event) = stream.next().await {
+               if let Some(value) = cal.sample(event) {
+                  break 'a Ok(value);
+               }
+            } else {
+               break;
+            }
+         }
+      }
+      Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "End of event stream").into())
+   }
+   .map(|value| (reader.into_evdev(), value))
+}
+
+pub async fn calibrate(mut accel_device: Evdev) -> Result<Matrix3x4<f32>, Box<dyn std::error::Error>> {
+   let mut samples = [Vec3::default(); 6];
+
+   print_utils::clear();
+
+   (accel_device, samples[Position::PosZ as usize]) = process(accel_device, Position::PosZ).await?;
+   (accel_device, samples[Position::NegZ as usize]) = process(accel_device, Position::NegZ).await?;
+   (accel_device, samples[Position::PosX as usize]) = process(accel_device, Position::PosX).await?;
+   (accel_device, samples[Position::NegX as usize]) = process(accel_device, Position::NegX).await?;
+   (accel_device, samples[Position::PosY as usize]) = process(accel_device, Position::PosY).await?;
+   (accel_device, samples[Position::NegY as usize]) = process(accel_device, Position::NegY).await?;
+   drop(accel_device);
+
+   calibration_pane::optimizing();
+   let affine_matrix = optimize(
+      samples[Position::PosX as usize],
+      samples[Position::NegX as usize],
+      samples[Position::PosY as usize],
+      samples[Position::NegY as usize],
+      samples[Position::PosZ as usize],
+      samples[Position::NegZ as usize],
+   );
+   calibration_pane::done();
+
+   Ok(affine_matrix)
+}
+
+fn optimize(pos_x: Vec3, neg_x: Vec3, pos_y: Vec3, neg_y: Vec3, pos_z: Vec3, neg_z: Vec3) -> Matrix3x4<f32> {
    let sample_matrix: SMatrix<f32, 18, 12> = matrix![
       pos_x.x, pos_x.y, pos_x.z, 1.0,     0.0,     0.0,     0.0,     0.0,     0.0,     0.0,     0.0,     0.0;
       0.0,     0.0,     0.0,     0.0,     pos_x.x, pos_x.y, pos_x.z, 1.0,     0.0,     0.0,     0.0,     0.0;
@@ -148,19 +200,8 @@ pub fn optimize(pos_x: Vec3, neg_x: Vec3, pos_y: Vec3, neg_y: Vec3, pos_z: Vec3,
       .map(f32::sqrt),
    );
 
-   // --- SVD Solve ---
-   // We compute the SVD of M. 'true, true' means compute U and V matrices.
    let svd = (weights * sample_matrix).svd(true, true);
-
-   // solve() uses the Moore-Penrose pseudoinverse logic internally.
-   // The epsilon (1e-7) handles rank-deficiency (colinearity).
    let p = svd.solve(&(weights * target_vector), 1e-10).expect("SVD solve failed");
-
-   // Reshape the 12x1 vector into a 3x4 Affine Matrix
-   let mut affine_matrix = Matrix4x3::from_column_slice(p.as_slice()).transpose();
-
-   println!("Calibrated line vector:\n{:}", p);
-   println!("Calibrated 4x3 Affine Matrix:\n{:}", affine_matrix);
-
+   let affine_matrix = Matrix4x3::from_column_slice(p.as_slice()).transpose();
    affine_matrix
 }

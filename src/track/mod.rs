@@ -1,16 +1,15 @@
-use super::{accprintln, dprintln, irprint, irprintln};
-use crate::config::Config;
-use crate::points::Dot;
+use super::{accprintln, irprint, irprintln};
+use crate::config::{Config, SensorBarSize, Smoothing};
 use crate::points::Vec3;
-use crate::track::print_utils::{acc_pane, sensorbar_pane, smooth_pane};
-use nalgebra::{OMatrix, SMatrix, matrix, vector};
+use crate::points::{Dot, DotLike};
+use crate::print_utils::{acc_pane, sensorbar_pane, smooth_pane};
+use nalgebra::{Matrix3x4, vector};
 use ordered_float::OrderedFloat;
 use proc_macros::process;
 use std::time::Instant;
 pub use types::RawDot;
 use types::{BarDotGuess, IRState, SensorBar, TWEMA, WEMAV, square};
 
-pub mod print_utils;
 mod types;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -19,23 +18,20 @@ struct ACC {
    smoothed: TWEMA<Vec3>, // you cannot average an angle, but you can average coordinates
    roll: f32,             // roll from accelerometer (rotation) in radians
    corrected: Dot,
-   calibration: SMatrix<f32, 3, 4>,
+   calibration: Matrix3x4<f32>,
 }
 
 impl ACC {
    pub fn new(config: &Config) -> Self {
       ACC {
-         calibration: SMatrix::<f32, 3, 4>::from_column_slice(&config.accelerometer_calibration),
+         calibration: Matrix3x4::<f32>::from_column_slice(&config.accelerometer_calibration),
          ..ACC::default()
       }
    }
 
    fn process(&mut self, data: Vec3) {
-      let data = vector![data.x, data.y, data.z, 1.0];
-      let data = self.calibration * data;
-      let data = Vec3::new(data.x, data.y, data.z);
       let old = self.smoothed.average;
-
+      let data = self.calibration * data.insert_row(3, 1.0);
       // smooth coordinates
       self.smoothed.add_value(data, Instant::now());
       let acc = self.smoothed.average.norm();
@@ -71,11 +67,8 @@ impl ACC {
       accprintln!("ACC: dist_tan: {:.3}", dist_tan);
       accprintln!("ACC: alpha: {:.3}", alpha);
 
-      self.corrected = (self.corrected * alpha)
-         + (Dot {
-            x: self.smoothed.average.z,
-            y: self.smoothed.average.x,
-         } * (1.0 - alpha));
+      self.corrected =
+         (self.corrected * alpha) + (vector![self.smoothed.average.z, self.smoothed.average.x,] * (1.0 - alpha));
       self.roll = -self.corrected.atan2();
       accprintln!("ACC: roll: {:.3}", self.roll.to_degrees());
 
@@ -93,18 +86,31 @@ impl ACC {
 #[derive(Clone, Copy, Default)]
 struct IR {
    state: IRState,
-   raw_position: Dot, // raw XY coordinate (0..1, 0.5 is center)
-   // distance: f32,     // pixel width of the sensor bar
-   z: f32, // wiimote to sensor bar distance in meters
-   sensorbar: SensorBar,
+   raw_position: Dot,     // raw XY coordinate (0..1, 0.5 is center)
+   z: f32,                // wiimote to sensor bar distance in meters
    position: Option<Dot>, // smoothed XY coordinate
    errors_left: u32,      // error count from smoothing algorithm
    glitch_cnt: u32,       // glitch count from smoothing algorithm
+   sensorbar: SensorBar,
+
+   // config smoothing
+   smoothing: Smoothing,
+
+   // config sensorbar
+   sensorbar_size: SensorBarSize,
 }
 
 impl IR {
-   fn new() -> Self {
-      IR::default()
+   fn new(config: &Config) -> Self {
+      IR {
+         smoothing: Smoothing {
+            radius: config.smoothing.radius / 1023.0,
+            speed: config.smoothing.speed,
+            deadzone: (config.smoothing.deadzone / 1023.0).powi(2),
+         },
+         sensorbar_size: config.sensor_bar,
+         ..IR::default()
+      }
    }
 
    fn find_edge_dot<'a>(&self, raw_dots: &'a [Dot]) -> (usize, &'a Dot) {
@@ -159,7 +165,7 @@ impl IR {
             if dots
                .iter()
                .enumerate()
-               .any(|(i, dot)| i != first && i != second && !cand.bounds_check(off_angle, dot))
+               .any(|(i, dot)| i != first && i != second && !cand.bounds_check(off_angle, dot, &self.sensorbar_size))
             {
                irprintln!("\tfailed middle dot check");
                continue;
@@ -242,7 +248,7 @@ impl IR {
          sensorbar_pane::single!();
       }
       self.raw_position = self.sensorbar.flat_avg();
-      self.z = SB_Z_COEFFICIENT / (self.sensorbar.flat_offset().x * 512.0);
+      self.z = self.sensorbar_size.pixel_width / (self.sensorbar.flat_offset().x * 512.0);
       true
    }
 
@@ -253,20 +259,14 @@ impl IR {
          self.position.map_or_else(|| "None".to_string(), |p| p.to_string())
       );
       let diff = position.offset(&self.raw_position);
-      if dist2 > SMOOTH_IR_DEADZONE {
-         if dist2 < SMOOTH_IR_RADIUS.powi(2) {
-            self.position = Some(position + diff * SMOOTH_IR_SPEED);
+      if dist2 > self.smoothing.deadzone {
+         if dist2 < self.smoothing.radius.powi(2) {
+            self.position = Some(position + diff * self.smoothing.speed);
             irprintln!("inside");
             smooth_pane::inside!(dist2);
          } else {
             let theta = diff.atan2();
-            self.position = Some(
-               self.raw_position
-                  - Dot {
-                     x: theta.cos(),
-                     y: theta.sin(),
-                  } * SMOOTH_IR_RADIUS,
-            );
+            self.position = Some(self.raw_position - vector![theta.cos(), theta.sin(),] * self.smoothing.radius);
             irprintln!("outside");
             smooth_pane::outside!(dist2);
          }
@@ -314,7 +314,7 @@ pub struct Tracker {
 impl Tracker {
    pub fn new(config: &Config) -> Tracker {
       Tracker {
-         ir: IR::new(),
+         ir: IR::new(config),
          acc: ACC::new(config),
       }
    }
@@ -329,46 +329,7 @@ impl Tracker {
 
    pub fn process_accelerometer_data(&mut self, data: Vec3) {
       acc_pane::begin!();
-      // SVD puro
-      // let correction = matrix![
-      //          1.0022228,  -0.0146525735,   -0.008091033 ,     28.390265 ;
-      //   -0.013285754   ,   1.0142968   ,-0.009260553    ,  33.626842 ;
-      // -0.00021422282   ,0.0007917918   ,   0.9951243    ,   28.16185;
-      //        ];
-
-      // soluzione ibrida
-      //     let correction = matrix![
-      //      1.0022228 , -0.0146525735,   -0.008091033,      29.093016 ;
-      //   -0.013285754 ,     1.0142968,   -0.009260553,      33.692974 ;
-      // -0.00021422282 ,  0.0007917918,      0.9951243,      29.718075 ;
-      //     ];
-      // seconda calibrazione
-      /*let correction = matrix![
-         0.010226312,  -0.00026041837, -0.000097612996,      0.29604778;
-      -0.00017977913,     0.010307922,  -0.00015668989,      0.34658885;
-      0.000029927236,  0.000102972146,     0.010124174,      0.29518628;
-        ];
-
-      accprintln!("{}", correction);
-      // let data = data-Vec3 { x: -29.732002, y: -33.8565, z: -29.842999 };
-      let data = vector![data.x, data.y, data.z, 1.0];
-      let corrected = correction * data;
-      let data = Vec3::new(corrected.x, corrected.y, corrected.z);*/
-
-      self.acc.process(
-         data, // Vec3 { x: -27.57731246399373, y: -32.8657151306604, z: -28.154628797327067 }
-              /*- Vec3 {
-                 x: -29.7,
-                 y: -34.0,
-                 z: -30.0,
-              }*/
-              // - Vec3 { x: -29.049667, y: -33.7915, z: -28.279167 },
-              // - Vec3 { x: -29.732002, y: -33.8565, z: -29.842999 },
-              // - Vec3 { x: -29.731003, y: -33.856403, z: -29.84071 },
-              // - Vec3 { x: -29.049667, y: -33.7915, z: -28.279165 },
-              // - Vec3 { x: -29.220253, y: -33.80775, z: -28.670122 },
-              // - Vec3 { x: -0.70275116, y: -0.06613159, z: -1.5562248 },
-      );
+      self.acc.process(data);
       acc_pane::end!();
    }
 
@@ -378,13 +339,13 @@ impl Tracker {
 }
 
 // cm center to center of emitters
-const SB_WIDTH: f32 = 19.5;
+// const SB_WIDTH: f32 = 19.5;
 
 // width in cm of emitters
-const SB_DOT_CLUSTER_WIDTH: f32 = 4.5;
+// const SB_DOT_CLUSTER_WIDTH: f32 = 4.5;
 
 // height in cm of emitters (with some tolerance)
-const SB_DOT_CLUSTER_HEIGHT: f32 = 1.0;
+// const SB_DOT_CLUSTER_HEIGHT: f32 = 1.0;
 
 // maximum sensor bar slope in degrees
 #[process(MAX_SB_SLOPE.to_radians())]
@@ -409,23 +370,23 @@ const SB_OFF_SCREEN_Y: f32 = 0.0;
 const SB_SINGLE_ADJUST_DISTANCE: f32 = 100.0;
 
 // width of the sensor bar in pixels at one meter from the Wiimote
-const SB_Z_COEFFICIENT: f32 = 256.0;
+// const SB_Z_COEFFICIENT: f32 = 256.0;
 
 // distance in meters from the center of the FOV to the left or right edge,
 // when the wiimote is at one meter
 // const WIIMOTE_FOV_COEFFICIENT: f32 = 0.39;
 
-#[process(SMOOTH_IR_RADIUS / 1023.0)]
-const SMOOTH_IR_RADIUS: f32 = 30.0;
-const SMOOTH_IR_SPEED: f32 = 0.15;
-#[process(square!(SMOOTH_IR_DEADZONE / 1023.0))]
-const SMOOTH_IR_DEADZONE: f32 = 8.0;
+// #[process(SMOOTH_IR_RADIUS / 1023.0)]
+// const SMOOTH_IR_RADIUS: f32 = 30.0;
+// const SMOOTH_IR_SPEED: f32 = 0.15;
+// #[process(square!(SMOOTH_IR_DEADZONE / 1023.0))]
+// const SMOOTH_IR_DEADZONE: f32 = 8.0;
 
 // max number of errors before cooked data drops out
-const ERROR_MAX_COUNT: u32 = 1;
+pub(crate) const ERROR_MAX_COUNT: u32 = 1;
 
 // max number of glitches before cooked data updates
-const GLITCH_MAX_COUNT: u32 = 5;
+pub(crate) const GLITCH_MAX_COUNT: u32 = 5;
 
 // squared delta over which we consider something a glitch
 #[process(square!(GLITCH_DIST / 1023.0))]

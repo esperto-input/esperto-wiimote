@@ -8,10 +8,11 @@ use esperto::types::Kind;
 use evdevil::bits::BitSet;
 use evdevil::event::{Abs, EventKind, EventType, InputEvent, Key, KeyState};
 use evdevil::reader::AsyncEvents;
+use evdevil::uinput::{EventWriter, UinputDevice};
 use evdevil::{Evdev, EventReader};
 use futures::{StreamExt, stream};
+use nalgebra::vector;
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::path::Path;
 use udev::Device;
@@ -66,24 +67,20 @@ impl SyncIrEvents {
    }
 }
 
-struct SyncAccelEvents {
+pub struct SyncAccelEvents {
    x: i32,
    y: i32,
    z: i32,
 }
 
 impl SyncAccelEvents {
-   fn new() -> SyncAccelEvents {
+   pub fn new() -> SyncAccelEvents {
       SyncAccelEvents { x: 0, y: 0, z: 0 }
    }
 
-   fn sync_event(&mut self, event: Raw) -> Option<Vec3> {
+   pub fn sync_event(&mut self, event: Raw) -> Option<Vec3> {
       match event {
-         Raw::AccelSyn => Some(Vec3 {
-            x: self.x as f32,
-            y: self.y as f32,
-            z: self.z as f32,
-         }),
+         Raw::AccelSyn => Some(vector![self.x as f32, self.y as f32, self.z as f32,]),
          Raw::Abs(abs, value) => {
             match abs {
                Abs::X => {
@@ -101,6 +98,24 @@ impl SyncAccelEvents {
          }
          _ => None,
       }
+   }
+
+   pub fn to_stream<'a, T: StreamExt<Item = Raw> + Send + Unpin + 'a>(
+      self,
+      accel_stream: &'a mut T,
+   ) -> impl StreamExt<Item = Vec3> + Send + use<'a, T> {
+      // let accel_stream = accel_stream.boxed();
+      stream::unfold((accel_stream, self), |(stream, mut sync)| async {
+         loop {
+            break match stream.next().await {
+               None => None,
+               Some(raw) => match sync.sync_event(raw) {
+                  None => continue,
+                  Some(event) => Some((event, (stream, sync))),
+               },
+            };
+         }
+      })
    }
 }
 
@@ -151,7 +166,28 @@ impl Raw {
    }
 }
 
-pub fn combine_streams(
+pub fn make_abs_stream<'a>(stream: AsyncEvents<'a>, syn: Raw) -> impl StreamExt<Item = Raw> + use<'a> + 'a {
+   stream::unfold(stream, move |mut stream| async move {
+      loop {
+         break match stream.next_event().await {
+            Ok(event) => Some((
+               match event.kind() {
+                  EventKind::Syn(_) => syn,
+                  EventKind::Abs(event) => Raw::Abs(event.abs(), event.value()),
+                  _ => continue,
+               },
+               stream,
+            )),
+            Err(e) => {
+               eprintln!("IR stream error: {:?}", e);
+               None
+            }
+         };
+      }
+   })
+}
+
+fn combine_streams(
    (key_stream, ir_stream, accel_stream): (AsyncEvents, AsyncEvents, AsyncEvents),
 ) -> impl StreamExt<Item = Raw> {
    let key_stream = stream::unfold(key_stream, |mut stream| async {
@@ -178,42 +214,8 @@ pub fn combine_streams(
          };
       }
    });
-   let accel_stream = stream::unfold(accel_stream, |mut stream| async {
-      loop {
-         break match stream.next_event().await {
-            Ok(event) => Some((
-               match event.kind() {
-                  EventKind::Syn(_) => Raw::AccelSyn,
-                  EventKind::Abs(event) => Raw::Abs(event.abs(), event.value()),
-                  _ => continue,
-               },
-               stream,
-            )),
-            Err(e) => {
-               eprintln!("Accelerometer stream error: {:?}", e);
-               None
-            }
-         };
-      }
-   });
-   let ir_stream = stream::unfold(ir_stream, |mut stream| async {
-      loop {
-         break match stream.next_event().await {
-            Ok(event) => Some((
-               match event.kind() {
-                  EventKind::Syn(_) => Raw::IRSyn,
-                  EventKind::Abs(event) => Raw::Abs(event.abs(), event.value()),
-                  _ => continue,
-               },
-               stream,
-            )),
-            Err(e) => {
-               eprintln!("IR stream error: {:?}", e);
-               None
-            }
-         };
-      }
-   });
+   let accel_stream = make_abs_stream(accel_stream, Raw::AccelSyn);
+   let ir_stream = make_abs_stream(ir_stream, Raw::IRSyn);
    stream::select(accel_stream, stream::select(ir_stream, key_stream))
 }
 
@@ -360,54 +362,22 @@ pub async fn device_handler(
    devices: (Evdev, Evdev, Evdev),
 ) -> Result<(), std::io::Error> {
    let mut readers = devices_into_readers(devices, config.grab).await?;
-   let key_stream = readers.0.async_events()?;
-   let mut ir_stream = readers.1.async_events()?;
-   let accel_stream = readers.2.async_events()?;
-
-   // workaround for `evdevil` bug
-   // consume and throw away wrong resync events
-   for _ in 0..8 {
-      let _ = ir_stream.next_event().await;
-   }
-
-   let stream = combine_streams((key_stream, ir_stream, accel_stream));
+   let stream = combine_streams((
+      readers.0.async_events()?,
+      readers.1.async_events()?,
+      readers.2.async_events()?,
+   ));
    tokio::pin!(stream);
 
    let devs = config.build_devices()?;
-
-   /*let dev = UinputDevice::builder()?
-   .with_keys([
-      Key::BTN_LEFT,
-      Key::BTN_RIGHT,
-      Key::BTN_MIDDLE,
-      Key::KEY_SPACE,
-      Key::KEY_ESC,
-      Key::KEY_UP,
-      Key::KEY_DOWN,
-      Key::KEY_LEFT,
-      Key::KEY_RIGHT,
-      Key::KEY_SCROLLUP,
-      Key::KEY_SCROLLDOWN,
-      Key::KEY_SCROLLLOCK,
-      Key::KEY_PAGEUP,
-      Key::KEY_PAGEDOWN,
-      Key::BTN_MIDDLE,
-      Key::BTN_WHEEL,
-   ])?
-   .with_rel_axes([Rel::WHEEL, Rel::HWHEEL])?
-   .with_abs_axes([
-      AbsSetup::new(Abs::X, AbsInfo::new(0, 4095)),
-      AbsSetup::new(Abs::Y, AbsInfo::new(0, 4095)),
-   ])?
-   // .with_key_repeat()?
-   .with_props([InputProp::POINTER])?
-   .build("Wiimote Mouse")?;*/
+   let mut writers = [None, None, None, None];
 
    let mut handler = WiimoteComboHandler::new(&config.esperto);
 
    let mut tracker = SyncTracker::new(config);
 
    while let Some(event) = stream.next().await {
+      // let now = std::time::Instant::now();
       match event {
          Raw::Key(key, kind) => {
             handler.handle(EspertoInput {
@@ -417,14 +387,7 @@ pub async fn device_handler(
             });
          }
          event @ (Raw::Abs(_, _) | Raw::AccelSyn | Raw::IRSyn) => {
-            /*const MIN_RELIABLE: f32 = 0.23;
-            const MAX_RELIABLE: f32 = 0.77;
-            const ASPECT_RATIO_Y: f32 = 21.0 / 9.0;
-            const ASPECT_RATIO_X: f32 = 9.0 / 9.0;*/
-
-            // let now = Instant::now();
             let dot = tracker.sync_event(event);
-            // println!("MAIN: tracking time: {:?}μs", now.elapsed().as_nanos() as f32 / 1000.0);
 
             if let Some(dot) = dot {
                handler.handle(EspertoInput {
@@ -437,44 +400,41 @@ pub async fn device_handler(
                   kind: Kind::AxisUpdate,
                   value: config.screen_limits.map_y(dot.y),
                });
-               // dprintln!("Got position from tracker")
             }
          }
       }
+      // println!("Done in {:?}", now.elapsed());
       while let Some(EspertoOutput { keycode, kind, value }) = handler.events().pop_front() {
-         match keycode.code {
-            OutputCodes::Axis(abs) => {
-               devs[keycode.slot.to_index()]
-                  .as_ref()
-                  .unwrap()
-                  .write(&[InputEvent::new(EventType::ABS, abs.raw(), value)])?;
-            }
-            OutputCodes::Key(key) => {
-               devs[keycode.slot.to_index()]
-                  .as_ref()
-                  .unwrap()
-                  .write(&[InputEvent::new(
-                     EventType::KEY,
-                     key.raw(),
-                     if kind == Kind::Down { 1 } else { 0 },
-                  )])?;
-            }
-            OutputCodes::CustomAxis(abs) => {
-               devs[keycode.slot.to_index()]
-                  .as_ref()
-                  .unwrap()
-                  .write(&[InputEvent::new(EventType::ABS, abs, value)])?;
-            }
-            OutputCodes::CustomKey(key) => {
-               devs[keycode.slot.to_index()]
-                  .as_ref()
-                  .unwrap()
-                  .write(&[InputEvent::new(
-                     EventType::KEY,
-                     key,
-                     if kind == Kind::Down { 1 } else { 0 },
-                  )])?;
-            }
+         if let Some(event) = match keycode.code {
+            OutputCodes::Axis(abs) => match kind {
+               Kind::AxisUpdate => Some(InputEvent::new(EventType::ABS, abs.raw(), value)),
+               _ => None,
+            },
+            OutputCodes::Key(key) => Some(InputEvent::new(
+               EventType::KEY,
+               key.raw(),
+               if kind == Kind::Down { 1 } else { 0 },
+            )),
+            OutputCodes::CustomAxis(abs) => match kind {
+               Kind::AxisUpdate => Some(InputEvent::new(EventType::ABS, abs, value)),
+
+               _ => None,
+            },
+            OutputCodes::CustomKey(key) => Some(InputEvent::new(
+               EventType::KEY,
+               key,
+               if kind == Kind::Down { 1 } else { 0 },
+            )),
+         } {
+            let writer = writers[keycode.slot.to_index()]
+               .take()
+               .unwrap_or_else(|| devs[keycode.slot.to_index()].as_ref().unwrap().writer());
+            writers[keycode.slot.to_index()] = Some(writer.write(&[event])?);
+         }
+      }
+      for i in 0..4 {
+         if let Some(writer) = writers[i].take() {
+            writer.finish()?;
          }
       }
    }

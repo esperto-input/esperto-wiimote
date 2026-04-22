@@ -1,11 +1,13 @@
 grab: false
+#on_connect: ["touch", "connect" ]
+#on_disconnect: ["touch", "disconnect"]
 slots:
   slot1:
     name: "Esperto Wiimote mouse"
   slot2:
     name: "Esperto Wiimote keyboard"
     repeating: true
-accelerometer_calibration: [ 1.0021962, -0.017654732, 0.0029900372, -0.025536085, 1.0101957, 0.010145217, -0.0096868, -0.0154394, 0.9928987, 28.825405, 34.302845, 30.264385 ]
+accelerometer_calibration: [ 1.0014056, -0.011690015, 0.009826779, -0.02909683, 1.013545, 0.005751312, -0.010004735, -0.012316463, 0.99458194, 28.481918, 33.827446, 30.468597 ]
 screen_limits:
   north: -2000
   south: 10355

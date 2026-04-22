@@ -1,16 +1,11 @@
 #![allow(unused_must_use)]
+#![allow(unused)]
 
-#[cfg(feature = "tuning")]
 use crate::points::Dot;
-#[cfg(feature = "tuning")]
 use crate::points::Vec3;
-#[cfg(feature = "tuning")]
-use crate::track::types::RawDot;
-#[cfg(feature = "tuning")]
+use crate::track::RawDot;
 use crate::track::{ERROR_MAX_COUNT, GLITCH_MAX_COUNT};
-#[cfg(feature = "tuning")]
 use const_format::{concatcp, str_repeat};
-#[cfg(feature = "tuning")]
 use crossterm::{
    Command,
    cursor::{MoveDown, MoveTo, MoveToColumn},
@@ -19,13 +14,16 @@ use crossterm::{
    terminal::{Clear, ClearType},
 };
 use proc_macros::phantom_pub;
-#[cfg(feature = "tuning")]
 use std::io::Write;
-#[cfg(feature = "tuning")]
 use std::io::{Stdout, stdout};
 
-const SMOOTHING_PANEL_X: u16 = 60;
-const SMOOTHING_PANEL_Y: u16 = 60;
+#[macro_export]
+macro_rules! dprintln {
+    ($($arg:tt)*) => {
+       #[cfg(all(debug_assertions,not(feature = "tuning")))]
+       ::std::println!($($arg)*)
+    };
+}
 
 #[macro_export]
 macro_rules! irprintln {
@@ -58,12 +56,15 @@ macro_rules! accprint {
     };
 }
 
-#[cfg(feature = "tuning")]
+pub fn clear() {
+   let mut so: Stdout = stdout();
+   queue!(so, Clear(ClearType::All));
+}
+
 struct NewLine {
    x: u16,
 }
 
-#[cfg(feature = "tuning")]
 impl Command for NewLine {
    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
       MoveDown(1).write_ansi(f)?;
@@ -73,20 +74,13 @@ impl Command for NewLine {
 }
 
 #[allow(non_snake_case)]
-#[cfg(feature = "tuning")]
 fn Newline(x: u16) -> NewLine {
    NewLine { x }
 }
 
-#[phantom_pub("tuning", "print_utils")]
-pub fn clear() {
-   let mut so: Stdout = stdout();
-   queue!(so, Clear(ClearType::All));
-}
-
 macro_rules! gen_begin {
-   ($title:literal, $module:literal) => {
-      #[phantom_pub("tuning", $module)]
+   ($(#[$meta:meta])*, $title:literal) => {
+      $(#[$meta])*
       pub fn begin() {
          queue!(
             stdout(),
@@ -100,8 +94,8 @@ macro_rules! gen_begin {
 }
 
 macro_rules! gen_end {
-   ($module:literal) => {
-      #[phantom_pub("tuning", $module)]
+   ($(#[$meta:meta])*) => {
+      $(#[$meta])*
       pub fn end() {
          let mut so: Stdout = stdout();
          queue!(
@@ -114,7 +108,6 @@ macro_rules! gen_end {
    };
 }
 
-#[cfg(feature = "tuning")]
 macro_rules! print {
       () => {
          queue!(
@@ -126,13 +119,12 @@ macro_rules! print {
          queue!(
             stdout(),
             Print("│"),
-            Print(format!("{:WIDTH$}", format!($($arg)*))),
+            Print(format!("{:^WIDTH$}", format!($($arg)*))),
             Print("│"),
          );
       };
 }
 
-#[cfg(feature = "tuning")]
 macro_rules! println {
       ()=>{
          print!();
@@ -146,17 +138,13 @@ macro_rules! println {
 pub mod sensorbar_pane {
    use super::*;
 
-   #[cfg(feature = "tuning")]
    const X: u16 = 0;
-   #[cfg(feature = "tuning")]
    const Y: u16 = 0;
-   #[cfg(feature = "tuning")]
    const WIDTH: usize = 60;
-   #[cfg(feature = "tuning")]
    const HEIGHT: u16 = 7;
 
-   gen_begin!("sensorbar", "sensorbar_pane");
-   gen_end!("sensorbar_pane");
+   gen_begin!(#[phantom_pub("tuning", "sensorbar_pane")], "sensorbar");
+   gen_end!(#[phantom_pub("tuning", "sensorbar_pane")]);
 
    #[phantom_pub("tuning", "sensorbar_pane")]
    pub fn raw_dots(raw_dots: &[RawDot; 4]) {
@@ -172,14 +160,14 @@ pub mod sensorbar_pane {
    pub fn dots(raw_dots: &[Dot], dots: &[Dot]) {
       queue!(stdout(), MoveTo(X, Y + 2));
       println!(
-         "{}",
+         "{:<WIDTH$}",
          raw_dots
             .iter()
             .map(|dot| format!("({:+6.3},{:+6.3})", dot.x, dot.y))
             .collect::<String>()
       );
       print!(
-         "{}",
+         "{:<WIDTH$}",
          dots
             .iter()
             .map(|dot| format!("({:+6.3},{:+6.3})", dot.x, dot.y))
@@ -187,7 +175,6 @@ pub mod sensorbar_pane {
       );
    }
 
-   #[cfg(feature = "tuning")]
    fn aligned(mode: &str, dot: usize, bardot: usize) {
       queue!(stdout(), MoveTo(X, Y + 4));
       let mut s: String = (0..4)
@@ -205,10 +192,7 @@ pub mod sensorbar_pane {
          .collect();
       s.replace_range(0..mode.len(), mode);
       println!("{}", s);
-      print!(
-         "{:^WIDTH$}",
-         format!("aligned {}", if bardot == 0 { "LEFT" } else { "RIGHT" })
-      );
+      print!("aligned {}", if bardot == 0 { "LEFT" } else { "RIGHT" });
    }
 
    #[phantom_pub("tuning", "sensorbar_pane")]
@@ -224,7 +208,7 @@ pub mod sensorbar_pane {
    #[phantom_pub("tuning", "sensorbar_pane")]
    pub fn single() {
       queue!(stdout(), MoveTo(X, Y + 6));
-      print!("{:^WIDTH$}", "SINGLE");
+      print!("SINGLE");
    }
 
    #[phantom_pub("tuning", "sensorbar_pane")]
@@ -250,7 +234,7 @@ pub mod sensorbar_pane {
       let s2 = format!("angle: {:+.2}°", angle.to_degrees());
       s1.replace_range(0..s2.len(), &s2);
       println!("{}", s1);
-      print!("{:^WIDTH$}", "OK");
+      print!("OK");
    }
 
    #[phantom_pub("tuning", "sensorbar_pane")]
@@ -260,7 +244,7 @@ pub mod sensorbar_pane {
       println!();
       println!();
       println!();
-      print!("{:^WIDTH$}", "DEAD");
+      print!("DEAD");
    }
 
    #[phantom_pub("tuning", "sensorbar_pane")]
@@ -270,36 +254,31 @@ pub mod sensorbar_pane {
       println!();
       println!();
       println!();
-      print!("{:^WIDTH$}", "LOST");
+      print!("LOST");
    }
 }
 
 pub mod acc_pane {
    use super::*;
 
-   #[cfg(feature = "tuning")]
    const X: u16 = 0;
-   #[cfg(feature = "tuning")]
    const Y: u16 = 8;
-   #[cfg(feature = "tuning")]
    const WIDTH: usize = 50;
-   #[cfg(feature = "tuning")]
    const HEIGHT: u16 = 5;
 
-   gen_begin!("accelerometer", "acc_pane");
-   gen_end!("acc_pane");
+   gen_begin!(#[phantom_pub("tuning", "acc_pane")], "accelerometer");
+   gen_end!(#[phantom_pub("tuning", "acc_pane")]);
 
-   #[cfg(feature = "tuning")]
    fn f(a: f32, b: f32, c: Vec3, is_vec3: bool, ok: bool) -> String {
       let mut s = format!("{:<WIDTH$.3}", a);
       let b = format!("{:7.3} {}", b, if ok { " " } else { "●" });
       let c = format!(
          "{}{:+8.3},{:+8.3},{:+8.3}{}",
-         if is_vec3 { "(" } else { "" },
+         if is_vec3 { "(" } else { " " },
          c.x,
          c.y,
          c.z,
-         if is_vec3 { ")" } else { "" }
+         if is_vec3 { ")" } else { " " }
       );
       s.replace_range(s.len() - c.len()..s.len(), &c);
       s.replace_range(9..9 + b.chars().count(), &b);
@@ -331,12 +310,9 @@ pub mod acc_pane {
    pub fn status(roll: f32, status: bool) {
       queue!(stdout(), MoveTo(X, Y + 4));
       print!(
-         "{:^WIDTH$}",
-         format!(
-            "{:>6} {:+8.3}°",
-            if status { "OK" } else { "REJECT" },
-            roll.to_degrees()
-         )
+         "{:>6} {:+8.3}°",
+         if status { "OK" } else { "REJECT" },
+         roll.to_degrees()
       );
    }
 }
@@ -344,22 +320,18 @@ pub mod acc_pane {
 pub mod smooth_pane {
    use super::*;
 
-   #[cfg(feature = "tuning")]
    const X: u16 = 52;
-   #[cfg(feature = "tuning")]
    const Y: u16 = 8;
-   #[cfg(feature = "tuning")]
    const WIDTH: usize = 14;
-   #[cfg(feature = "tuning")]
    const HEIGHT: u16 = 4;
 
-   gen_begin!("smoothing", "smooth_pane");
-   gen_end!("smooth_pane");
+   gen_begin!(#[phantom_pub("tuning", "smooth_pane")], "smoothing");
+   gen_end!(#[phantom_pub("tuning", "smooth_pane")]);
 
    #[phantom_pub("tuning", "smooth_pane")]
    fn smoothing(dist2: f32, mode: &str) {
       queue!(stdout(), MoveTo(X, Y + 3));
-      print!("{:^WIDTH$}", format!("{:4.0} {:8}", dist2.sqrt() * 1023.0, mode));
+      print!("{:4.0} {:8}", dist2.sqrt() * 1023.0, mode);
    }
 
    #[phantom_pub("tuning", "smooth_pane")]
@@ -380,10 +352,77 @@ pub mod smooth_pane {
    #[phantom_pub("tuning", "smooth_pane")]
    pub fn counters(errors_left: u32, glitch_cnt: u32) {
       queue!(stdout(), MoveTo(X, Y + 1));
-      println!(
-         "{:^WIDTH$}",
-         format!("errors: {}/{ERROR_MAX_COUNT}", ERROR_MAX_COUNT - errors_left)
-      );
-      print!("{:^WIDTH$}", format!("glitch: {}/{GLITCH_MAX_COUNT}", glitch_cnt));
+      println!("errors: {}/{ERROR_MAX_COUNT}", ERROR_MAX_COUNT - errors_left);
+      print!("glitch: {}/{GLITCH_MAX_COUNT}", glitch_cnt);
+   }
+}
+
+pub mod calibration_pane {
+   use super::*;
+   use crate::calibration::Position;
+
+   const X: u16 = 0;
+   const Y: u16 = 0;
+   const WIDTH: usize = 30;
+   const HEIGHT: u16 = 4;
+
+   gen_begin!(,"calibration");
+   gen_end!();
+
+   pub fn warming_up(countdown: i32) {
+      queue!(stdout(), MoveTo(X, Y + 1));
+      println!();
+      println!("Warming up!  {:2}", countdown);
+      println!();
+      print!();
+   }
+
+   pub fn progress(progress: usize) {
+      queue!(stdout(), MoveTo(X, Y + 3));
+      print!("[{:▯<20}]", "▮".repeat(progress));
+   }
+
+   pub fn sds(sds: Vec3) {
+      queue!(stdout(), MoveTo(X, Y + 1));
+      print!("({:+8.3},{:+8.3},{:+8.3})", sds.x, sds.y, sds.z);
+   }
+
+   pub fn avgs(avgs: Vec3) {
+      queue!(stdout(), MoveTo(X, Y + 2));
+      print!("({:+8.3},{:+8.3},{:+8.3})", avgs.x, avgs.y, avgs.z);
+   }
+
+   pub fn splash(position: Position) {
+      begin();
+      queue!(stdout(), MoveTo(X, Y + 1));
+      println!("Place the wiimote");
+      match position {
+         Position::PosX => {println!("right side down");}
+         Position::NegX => {println!("right side up");}
+         Position::PosY => {println!("sensor side down");}
+         Position::NegY => {println!("sensor side up");}
+         Position::PosZ => {println!("face side up");}
+         Position::NegZ => {println!("face side down");}
+      }
+      print!("press any key to continue");
+      end();
+   }
+
+   pub fn optimizing() {
+      begin();
+      queue!(stdout(), MoveTo(X, Y + 1));
+      println!();
+      println!("Optimizing...");
+      print!();
+      end();
+   }
+
+   pub fn done() {
+      begin();
+      queue!(stdout(), MoveTo(X, Y + 1));
+      println!();
+      println!("DONE !");
+      print!();
+      end();
    }
 }

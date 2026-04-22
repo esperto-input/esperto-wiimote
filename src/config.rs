@@ -1,10 +1,9 @@
-use crate::regprintln;
 use esperto::combo::ComboHandlerSimple;
 use esperto::types::Event;
 use esperto::types::Scalar;
-use evdevil::AbsInfo;
 use evdevil::event::{Abs, Key};
 use evdevil::uinput::{AbsSetup, UinputDevice};
+use evdevil::AbsInfo;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
@@ -84,10 +83,10 @@ impl OutputCodes {
    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SlotInfo {
    pub name: String,
-   #[serde(default = "Default::default")]
+   #[serde(default = "Default::default", skip_serializing_if = "is_default")]
    pub repeating: bool,
 }
 
@@ -98,21 +97,25 @@ pub fn default_slot_info<const N: usize>() -> SlotInfo {
    }
 }
 
+pub fn is_default_info<const N: usize>(info: &SlotInfo) -> bool {
+   info == &default_slot_info::<N>()
+}
+
 impl Default for SlotInfo {
    fn default() -> Self {
       default_slot_info::<0>()
    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Slots {
-   #[serde(default = "default_slot_info::<1>")]
+   #[serde(default = "default_slot_info::<1>", skip_serializing_if = "is_default_info::<1>")]
    pub slot1: SlotInfo,
-   #[serde(default = "default_slot_info::<2>")]
+   #[serde(default = "default_slot_info::<2>", skip_serializing_if = "is_default_info::<2>")]
    pub slot2: SlotInfo,
-   #[serde(default = "default_slot_info::<3>")]
+   #[serde(default = "default_slot_info::<3>", skip_serializing_if = "is_default_info::<3>")]
    pub slot3: SlotInfo,
-   #[serde(default = "default_slot_info::<4>")]
+   #[serde(default = "default_slot_info::<4>", skip_serializing_if = "is_default_info::<4>")]
    pub slot4: SlotInfo,
 }
 
@@ -140,7 +143,7 @@ impl Index<usize> for Slots {
    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScreenLimits {
    north: i32,
    south: i32,
@@ -202,12 +205,12 @@ impl Display for OutputEvent {
    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
 pub struct SensorBarSize {
-   width: f32,
-   cluster_width: f32,
-   cluster_height: f32,
-   pixel_size: f32,
+   pub width: f32,
+   pub cluster_width: f32,
+   pub cluster_height: f32,
+   pub pixel_width: f32,
 }
 
 impl Default for SensorBarSize {
@@ -216,16 +219,16 @@ impl Default for SensorBarSize {
          width: 19.5,
          cluster_width: 4.5,
          cluster_height: 1.0,
-         pixel_size: 256.0,
+         pixel_width: 256.0,
       }
    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
 pub struct Smoothing {
-   radius: f32,
-   speed: f32,
-   deadzone: f32,
+   pub radius: f32,
+   pub speed: f32,
+   pub deadzone: f32,
 }
 
 impl Default for Smoothing {
@@ -238,7 +241,7 @@ impl Default for Smoothing {
    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Parking {
    x: i32,
    y: i32,
@@ -258,19 +261,23 @@ pub type WiimoteComboHandler = ComboHandlerSimple<WiimoteEvent, OutputEvent, i32
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Config {
-   #[serde(default = "Default::default")]
+   #[serde(default = "Default::default", skip_serializing_if = "is_default")]
    pub grab: bool,
-   #[serde(default = "Default::default")]
+   #[serde(default = "Default::default", skip_serializing_if = "is_default")]
+   pub on_connect: Option<Vec<String>>,
+   #[serde(default = "Default::default", skip_serializing_if = "is_default")]
+   pub on_disconnect: Option<Vec<String>>,
+   #[serde(default = "Default::default", skip_serializing_if = "is_default")]
    pub slots: Slots,
-   #[serde(default = "Default::default")]
+   #[serde(default = "Default::default", skip_serializing_if = "is_default")]
    pub accelerometer_calibration: [f32; 12],
-   #[serde(default = "Default::default")]
+   #[serde(default = "Default::default", skip_serializing_if = "is_default")]
    pub screen_limits: ScreenLimits,
-   #[serde(default = "Default::default")]
+   #[serde(default = "Default::default", skip_serializing_if = "is_default")]
    pub sensor_bar: SensorBarSize,
-   #[serde(default = "Default::default")]
+   #[serde(default = "Default::default", skip_serializing_if = "is_default")]
    pub smoothing: Smoothing,
-   #[serde(default = "Default::default")]
+   #[serde(default = "Default::default", skip_serializing_if = "is_default")]
    pub parking: Parking,
    pub esperto: EspertoConfig,
 }
@@ -317,7 +324,7 @@ impl Config {
       match self.esperto.validate() {
          Ok(warnings) => {
             for warn in warnings.iter() {
-               regprintln!("Warning: {}", warn);
+               println!("Warning: {}", warn);
             }
             Ok(())
          }
@@ -348,4 +355,8 @@ impl Config {
          })
       })
    }
+}
+
+fn is_default<T: Default + PartialEq>(t: &T) -> bool {
+   t == &T::default()
 }
