@@ -401,10 +401,10 @@ pub mod calibration_pane {
          Position::NegX => {println!("right side up");}
          Position::PosY => {println!("sensor side down");}
          Position::NegY => {println!("sensor side up");}
-         Position::PosZ => {println!("face side up");}
-         Position::NegZ => {println!("face side down");}
+         Position::PosZ => {println!("buttons side up");}
+         Position::NegZ => {println!("buttons side down");}
       }
-      print!("press any key to continue");
+      print!("press any key when ready..");
       end();
    }
 

@@ -2,6 +2,8 @@
 name = "esperto-wiimote"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+readme = "README.md"
 
 [lib]
 name = "proc_macros"
@@ -9,9 +11,9 @@ path = "src/proc_macros/lib.rs"
 proc-macro = true
 
 [dependencies]
-crossterm = { version = "0.29.0", default-features = false, features = ["events"] }
+crossterm = { version = "0.29.0", default-features = false, features = ["events", "event-stream"] }
 esperto = { version = "0.6.1", features = ["serde"] }
-tokio = { version = "1.51.0", features = ["macros", "rt"] }
+tokio = { version = "1.51.0", features = ["macros", "rt", "signal"] }
 evdevil = { version = "0.4.1", features = ["tokio", "serde"] }
 tokio-udev = "0.10.0"
 udev = "0.9.3"

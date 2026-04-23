@@ -1,67 +1,12 @@
+use crate::irprintln;
 use crate::points::{Dot, DotLike};
 use crate::track::{
-   MAX_SB_SLOPE, MIN_SB_WIDTH, TWEMA_MAX_ELAPSED_TIME,
-   TWEMA_WEIGHT_LOWER_BOUND, TWEMA_WEIGHT_UPPER_BOUND, WELFORD_MAX_COUNT,
+   MAX_SB_SLOPE, MIN_SB_WIDTH
+   ,
 };
-use crate::irprintln;
 use nalgebra::vector;
 use ordered_float::OrderedFloat;
 use std::cmp::{max_by_key, min};
-use std::ops::{AddAssign, Mul, MulAssign};
-use std::time::Instant;
-
-// Time-Weighted Exponential Moving Average
-#[derive(Debug, Clone, Copy)]
-pub struct TWEMA<T: Copy + Default + AddAssign<T> + MulAssign<f32> + Mul<f32, Output = T>> {
-   pub average: T,
-   last: T,
-   timestamp: Instant,
-}
-
-impl<T: Copy + Default + AddAssign<T> + MulAssign<f32> + Mul<f32, Output = T>> Default for TWEMA<T> {
-   fn default() -> Self {
-      Self {
-         average: T::default(),
-         last: T::default(),
-         timestamp: Instant::now(),
-      }
-   }
-}
-
-impl<T: Copy + Default + AddAssign<T> + MulAssign<f32> + Mul<f32, Output = T>> TWEMA<T> {
-   pub fn add_value(&mut self, value: T, timestamp: Instant) {
-      let elapsed = (timestamp.duration_since(self.timestamp).as_secs_f32() / TWEMA_MAX_ELAPSED_TIME).clamp(0.0, 1.0);
-      let weight = TWEMA_WEIGHT_LOWER_BOUND + (elapsed * (TWEMA_WEIGHT_UPPER_BOUND - TWEMA_WEIGHT_LOWER_BOUND));
-      self.average *= 1.0 - weight;
-      self.average += value * weight;
-      self.last = value;
-      self.timestamp = timestamp;
-   }
-}
-
-// Welford/Exponential Moving Average & Variance
-#[derive(Debug, Clone, Copy, Default)]
-pub struct WEMAV {
-   pub average: f32,
-   count: f32,
-   pub variance: f32,
-}
-
-impl WEMAV {
-   pub fn add_value(&mut self, value: f32) {
-      let old_avg = self.average;
-      self.count += (self.count < WELFORD_MAX_COUNT) as u8 as f32;
-
-      self.average += (value - self.average) / (self.count);
-      self.variance =
-         self.variance * (self.count - 1.0) / self.count + (value - old_avg) * (value - self.average) / self.count;
-   }
-
-   pub fn sd(&self) -> f32 {
-      self.variance.sqrt()
-   }
-}
-
 #[derive(Clone, Copy, Eq, PartialEq, Default)]
 pub enum IRState {
    #[default]
@@ -148,10 +93,11 @@ impl SensorBar {
    }
 
    pub fn find_closest<'a>(&self, dots: &'a [Dot]) -> BarDotGuess<'a> {
+      #[allow(unused_variables)]
       dots
          .iter()
          .enumerate()
-         .map(|(i, dot)| {
+         .map(|( i, dot)| {
             let (dist2, closest) = min(
                (OrderedFloat(dot.distance2(self.left())), 0usize),
                (OrderedFloat(dot.distance2(self.right())), 1usize),
@@ -215,7 +161,7 @@ impl SensorBar {
    pub fn flat_offset(&self) -> Dot {
       self.flat_left().offset(self.flat_right())
    }
-   
+
    pub fn flat_distance(&self) -> f32 {
       self.flat_offset().x
    }

@@ -1,11 +1,11 @@
 use esperto::combo::ComboHandlerSimple;
 use esperto::types::Event;
 use esperto::types::Scalar;
+use evdevil::AbsInfo;
 use evdevil::event::{Abs, Key};
 use evdevil::uinput::{AbsSetup, UinputDevice};
-use evdevil::AbsInfo;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::ops::Index;
 
@@ -74,7 +74,7 @@ impl OutputCodes {
       !self.is_key()
    }
 
-   pub fn get_raw(self) -> u16 {
+   pub fn raw(self) -> u16 {
       match self {
          OutputCodes::Axis(raw) => raw.raw(),
          OutputCodes::Key(raw) => raw.raw(),
@@ -241,15 +241,18 @@ impl Default for Smoothing {
    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Parking {
-   x: i32,
-   y: i32,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum OnlyAbs {
+   Axis(Abs),
+   CustomAxis(u16),
 }
 
-impl Default for Parking {
-   fn default() -> Self {
-      Parking { x: 4095, y: 4095 }
+impl OnlyAbs {
+   pub fn raw(&self) -> u16 {
+      match self {
+         OnlyAbs::Axis(abs) => abs.raw(),
+         OnlyAbs::CustomAxis(abs) => *abs,
+      }
    }
 }
 
@@ -278,7 +281,9 @@ pub struct Config {
    #[serde(default = "Default::default", skip_serializing_if = "is_default")]
    pub smoothing: Smoothing,
    #[serde(default = "Default::default", skip_serializing_if = "is_default")]
-   pub parking: Parking,
+   pub parking: HashMap<OnlyAbs, i32>,
+   #[serde(default = "Default::default", skip_serializing_if = "is_default")]
+   pub centering: HashMap<OnlyAbs, i32>,
    pub esperto: EspertoConfig,
 }
 
@@ -290,9 +295,9 @@ impl Config {
       self.esperto.iter_actions().for_each(|(_, _, output)| {
          if let Some(output) = output {
             if output.code.is_key() {
-               key_capabilities[output.slot.to_index()].insert(output.code.get_raw());
+               key_capabilities[output.slot.to_index()].insert(output.code.raw());
             } else {
-               abs_capabilities[output.slot.to_index()].insert(output.code.get_raw());
+               abs_capabilities[output.slot.to_index()].insert(output.code.raw());
             }
          }
       });
@@ -349,6 +354,59 @@ impl Config {
                         format!("Config validation failed: cannot map key {input:?}, to absolute axis {output}",),
                      ));
                   }
+               }
+               Ok(())
+            })
+         })
+      })
+      .and_then(|_| {
+         self.esperto.modifiers.iter().fold(Ok(()), |res, modifier| {
+            res.and_then(|_| {
+               modifier.keys.iter().fold(Ok(()), |res, key| {
+                  res.and_then(|_| {
+                     if key.is_axis() {
+                        return Err(std::io::Error::new(
+                           std::io::ErrorKind::InvalidInput,
+                           format!("Config validation failed: in group {}, axis {key:?}", modifier.id,),
+                        ));
+                     }
+                     Ok(())
+                  })
+               })
+            })
+         })
+      })
+      .and_then(|_| {
+         self.parking.keys().fold(Ok(()), |res, axis| {
+            res.and_then(|_| {
+               if let OnlyAbs::Axis(abs) = axis
+                  && self.parking.contains_key(&OnlyAbs::CustomAxis(abs.raw()))
+               {
+                  return Err(std::io::Error::new(
+                     std::io::ErrorKind::InvalidInput,
+                     format!(
+                        "Config validation failed: duplicated parking definition {axis:?} and {:?} are the same",
+                        OnlyAbs::CustomAxis(abs.raw())
+                     ),
+                  ));
+               }
+               Ok(())
+            })
+         })
+      })
+      .and_then(|_| {
+         self.centering.keys().fold(Ok(()), |res, axis| {
+            res.and_then(|_| {
+               if let OnlyAbs::Axis(abs) = axis
+                  && self.centering.contains_key(&OnlyAbs::CustomAxis(abs.raw()))
+               {
+                  return Err(std::io::Error::new(
+                     std::io::ErrorKind::InvalidInput,
+                     format!(
+                        "Config validation failed: duplicated centering definition {axis:?} and {:?} are the same",
+                        OnlyAbs::CustomAxis(abs.raw())
+                     ),
+                  ));
                }
                Ok(())
             })

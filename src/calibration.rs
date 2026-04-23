@@ -1,46 +1,14 @@
 use crate::points::Vec3;
 use crate::print_utils;
 use crate::print_utils::calibration_pane;
-use crate::routing::{make_abs_stream, Raw, SyncAccelEvents};
+use crate::routing::{Raw, SyncAccelEvents, make_abs_stream};
+use crate::stats::TWEMA;
 use crossterm::event;
 use evdevil::Evdev;
 use futures::StreamExt;
-use nalgebra::{matrix, vector, Matrix3x4, Matrix4x3, SMatrix};
+use nalgebra::{Matrix3x4, Matrix4x3, SMatrix, matrix, vector};
+use std::future;
 use std::time::{Duration, Instant};
-
-struct TWEMA {
-   pub averages: Vec3,
-   pub variances: Vec3,
-   pub last: Instant,
-}
-
-impl TWEMA {
-   pub const TAU: f32 = Duration::from_secs(10).as_millis_f32();
-
-   pub fn new(now: Instant, initial: Vec3) -> Self {
-      TWEMA {
-         averages: initial,
-         variances: Default::default(),
-         last: now,
-      }
-   }
-
-   pub fn add_value(&mut self, value: Vec3, now: Instant) {
-      let old_average = self.averages;
-
-      let w = (-now.duration_since(self.last).as_millis_f32() / TWEMA::TAU)
-         .exp()
-         .clamp(0.0, 1.0);
-      self.last = now;
-
-      self.averages = self.averages * w + value * (1.0 - w);
-      self.variances = self.variances * w + (value - old_average).component_mul(&(value - self.averages)) * (1.0 - w);
-   }
-
-   pub fn sd(&self) -> Vec3 {
-      self.variances.map(f32::sqrt)
-   }
-}
 
 #[repr(usize)]
 #[derive(Copy, Clone, Debug)]
@@ -56,11 +24,10 @@ pub enum Position {
 struct Calibrate {
    start_time: Instant,
    averages: TWEMA,
+   sd_threshold: f32,
 }
 
 impl Calibrate {
-   const THRESHOLD: f32 = 1.4;
-
    pub fn sample(&mut self, new: Vec3) -> Option<Vec3> {
       calibration_pane::begin();
 
@@ -75,26 +42,31 @@ impl Calibrate {
          return None;
       }
 
-      let progress = 20 - ((sd - Self::THRESHOLD).sqrt().clamp(0.0, 3.0) * (20.0 / 3.0)) as usize;
+      let progress = 20 - ((sd - self.sd_threshold).sqrt().clamp(0.0, 3.0) * (20.0 / 3.0)) as usize;
       calibration_pane::progress(progress);
       calibration_pane::sds(sds);
       calibration_pane::avgs(self.averages.averages);
       calibration_pane::end();
 
-      if sd < Self::THRESHOLD {
+      if sd < self.sd_threshold {
          return Some(self.averages.averages);
       }
       None
    }
 }
 
-pub async fn process(accel_device: Evdev, position: Position) -> Result<(Evdev, Vec3), Box<dyn std::error::Error>> {
+pub async fn process(
+   accel_device: Evdev,
+   position: Position,
+   sysname: &str,
+   sd_threshold: f32,
+) -> Result<(Evdev, Vec3), Box<dyn std::error::Error>> {
    calibration_pane::splash(position);
-   while !event::read()?.is_key_press() {}
+   pause().await?;
 
    let mut reader = accel_device.into_reader()?;
    'a: {
-      let mut raw_stream = make_abs_stream(reader.async_events()?, Raw::AccelSyn).boxed();
+      let mut raw_stream = make_abs_stream(reader.async_events()?, Raw::AccelSyn, "Accel", sysname).boxed();
       let sync = SyncAccelEvents::new();
       let stream = sync.to_stream(&mut raw_stream);
       tokio::pin!(stream);
@@ -106,6 +78,7 @@ pub async fn process(accel_device: Evdev, position: Position) -> Result<(Evdev, 
          cal = Calibrate {
             start_time: now,
             averages: TWEMA::new(now, event),
+            sd_threshold,
          };
          loop {
             if let Some(event) = stream.next().await {
@@ -122,17 +95,28 @@ pub async fn process(accel_device: Evdev, position: Position) -> Result<(Evdev, 
    .map(|value| (reader.into_evdev(), value))
 }
 
-pub async fn calibrate(mut accel_device: Evdev) -> Result<Matrix3x4<f32>, Box<dyn std::error::Error>> {
+pub async fn calibrate(
+   mut accel_device: Evdev,
+   sysname: &str,
+   sd_threshold: f32,
+   weight: f32,
+) -> Result<Matrix3x4<f32>, Box<dyn std::error::Error>> {
    let mut samples = [Vec3::default(); 6];
 
    print_utils::clear();
 
-   (accel_device, samples[Position::PosZ as usize]) = process(accel_device, Position::PosZ).await?;
-   (accel_device, samples[Position::NegZ as usize]) = process(accel_device, Position::NegZ).await?;
-   (accel_device, samples[Position::PosX as usize]) = process(accel_device, Position::PosX).await?;
-   (accel_device, samples[Position::NegX as usize]) = process(accel_device, Position::NegX).await?;
-   (accel_device, samples[Position::PosY as usize]) = process(accel_device, Position::PosY).await?;
-   (accel_device, samples[Position::NegY as usize]) = process(accel_device, Position::NegY).await?;
+   (accel_device, samples[Position::PosZ as usize]) =
+      process(accel_device, Position::PosZ, sysname, sd_threshold).await?;
+   (accel_device, samples[Position::NegZ as usize]) =
+      process(accel_device, Position::NegZ, sysname, sd_threshold).await?;
+   (accel_device, samples[Position::PosX as usize]) =
+      process(accel_device, Position::PosX, sysname, sd_threshold).await?;
+   (accel_device, samples[Position::NegX as usize]) =
+      process(accel_device, Position::NegX, sysname, sd_threshold).await?;
+   (accel_device, samples[Position::PosY as usize]) =
+      process(accel_device, Position::PosY, sysname, sd_threshold).await?;
+   (accel_device, samples[Position::NegY as usize]) =
+      process(accel_device, Position::NegY, sysname, sd_threshold).await?;
    drop(accel_device);
 
    calibration_pane::optimizing();
@@ -143,13 +127,22 @@ pub async fn calibrate(mut accel_device: Evdev) -> Result<Matrix3x4<f32>, Box<dy
       samples[Position::NegY as usize],
       samples[Position::PosZ as usize],
       samples[Position::NegZ as usize],
+      weight,
    );
    calibration_pane::done();
 
    Ok(affine_matrix)
 }
 
-fn optimize(pos_x: Vec3, neg_x: Vec3, pos_y: Vec3, neg_y: Vec3, pos_z: Vec3, neg_z: Vec3) -> Matrix3x4<f32> {
+fn optimize(
+   pos_x: Vec3,
+   neg_x: Vec3,
+   pos_y: Vec3,
+   neg_y: Vec3,
+   pos_z: Vec3,
+   neg_z: Vec3,
+   weight: f32,
+) -> Matrix3x4<f32> {
    let sample_matrix: SMatrix<f32, 18, 12> = matrix![
       pos_x.x, pos_x.y, pos_x.z, 1.0,     0.0,     0.0,     0.0,     0.0,     0.0,     0.0,     0.0,     0.0;
       0.0,     0.0,     0.0,     0.0,     pos_x.x, pos_x.y, pos_x.z, 1.0,     0.0,     0.0,     0.0,     0.0;
@@ -175,7 +168,7 @@ fn optimize(pos_x: Vec3, neg_x: Vec3, pos_y: Vec3, neg_y: Vec3, pos_z: Vec3, neg
       98.0, 0.0, 0.0, -98.0, 0.0, 0.0, 0.0, 98.0, 0.0, 0.0, -98.0, 0.0, 0.0, 0.0, 98.0, 0.0, 0.0, -98.0,
    ];
 
-   let weight = 500.0;
+   // let weight = 500.0;
    let weights = SMatrix::<f32, 18, 18>::from_diagonal(
       &vector![
          1.0 * weight,
@@ -204,4 +197,26 @@ fn optimize(pos_x: Vec3, neg_x: Vec3, pos_y: Vec3, neg_y: Vec3, pos_z: Vec3, neg
    let p = svd.solve(&(weights * target_vector), 1e-10).expect("SVD solve failed");
    let affine_matrix = Matrix4x3::from_column_slice(p.as_slice()).transpose();
    affine_matrix
+}
+
+async fn pause() -> Result<(), Box<dyn std::error::Error>> {
+   // consume already present events
+   while event::poll(Duration::default())? {
+      event::read()?;
+   }
+   // wait for keypress
+   let mut reader = event::EventStream::new();
+   let was = crossterm::terminal::is_raw_mode_enabled()?;
+   crossterm::terminal::enable_raw_mode()?;
+   while let Some(event) = reader.next().await
+      && !event?.is_key_press()
+   {}
+   if !was {
+      crossterm::terminal::disable_raw_mode()?;
+   }
+   // consume stray events
+   while event::poll(Duration::default())? {
+      event::read()?;
+   }
+   Ok(())
 }

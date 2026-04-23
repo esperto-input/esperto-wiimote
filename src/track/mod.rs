@@ -3,19 +3,21 @@ use crate::config::{Config, SensorBarSize, Smoothing};
 use crate::points::Vec3;
 use crate::points::{Dot, DotLike};
 use crate::print_utils::{acc_pane, sensorbar_pane, smooth_pane};
-use nalgebra::{Matrix3x4, vector};
+use nalgebra::{vector, Matrix3x4};
 use ordered_float::OrderedFloat;
 use proc_macros::process;
 use std::time::Instant;
 pub use types::RawDot;
-use types::{BarDotGuess, IRState, SensorBar, TWEMA, WEMAV, square};
+use types::{square, BarDotGuess, IRState,
+            SensorBar};
+use crate::stats::{TWBEMA, WEMAV};
 
 mod types;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct ACC {
    gravity: WEMAV,
-   smoothed: TWEMA<Vec3>, // you cannot average an angle, but you can average coordinates
+   smoothed: TWBEMA<Vec3>, // you cannot average an angle, but you can average coordinates
    roll: f32,             // roll from accelerometer (rotation) in radians
    corrected: Dot,
    calibration: Matrix3x4<f32>,
@@ -32,7 +34,6 @@ impl ACC {
    fn process(&mut self, data: Vec3) {
       let old = self.smoothed.average;
       let data = self.calibration * data.insert_row(3, 1.0);
-      // smooth coordinates
       self.smoothed.add_value(data, Instant::now());
       let acc = self.smoothed.average.norm();
 
@@ -140,7 +141,8 @@ impl IR {
       let mut cand: SensorBar = *sb;
       let mut min_distance = f32::INFINITY;
       let mut found = false;
-      let mut ind: (usize, usize) = (0, 0);
+      #[cfg(feature = "tuning")]
+      let mut choice: (usize, usize) = (0, 0);
 
       // iterate through all dot pairs
       for first in 0..dots.len() - 1 {
@@ -174,14 +176,17 @@ impl IR {
             // pick the candidate with the smallest distance
             if cand.offset().x < min_distance {
                irprintln!("\tnew best");
-               ind = (first, second);
                min_distance = cand.offset().x;
                *sb = cand;
                found = true;
+               #[cfg(feature = "tuning")]
+               {
+                  choice = (first, second);
+               }
             }
          }
       }
-      sensorbar_pane::double!(found, ind.0, ind.1, sb.angle(), min_distance);
+      sensorbar_pane::double!(found, choice.0, choice.1, sb.angle(), min_distance);
       found
    }
 
@@ -238,9 +243,11 @@ impl IR {
             );
             sensorbar_pane::single_adjust!(guess.i, guess.closest);
             self.sensorbar = new_sb;
-         } else {
+         }  else {
             irprintln!("IR: adjust skipped");
+            #[allow(unused_variables)]
             let (i, dot) = self.find_edge_dot(raw_dots);
+            #[allow(unused_variables)]
             let bardot = self.sensorbar.align_furthest(dot, roll);
             sensorbar_pane::single_lost!(i, bardot);
          }
@@ -392,15 +399,6 @@ pub(crate) const GLITCH_MAX_COUNT: u32 = 5;
 #[process(square!(GLITCH_DIST / 1023.0))]
 const GLITCH_DIST: f32 = 150.0;
 
-// maximum alpha for twema
-const TWEMA_WEIGHT_UPPER_BOUND: f32 = 0.85;
-
-// minimum alpha for twema
-const TWEMA_WEIGHT_LOWER_BOUND: f32 = 0.2;
-
-// time mapped to maximum alpha
-const TWEMA_MAX_ELAPSED_TIME: f32 = 0.25;
-
 // threshold for accepting gravity readings
 const GATE_THRESHOLD: f32 = 1.0;
 
@@ -412,5 +410,3 @@ const DIST_THRESHOLD: f32 = 0.15;
 // in units of gravity
 const ACCELERATION_THRESHOLD: f32 = 0.13;
 
-// count for switching to exponential averaging
-const WELFORD_MAX_COUNT: f32 = 30_000.0;

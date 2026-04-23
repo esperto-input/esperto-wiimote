@@ -1,6 +1,4 @@
 grab: false
-#on_connect: ["touch", "connect" ]
-#on_disconnect: ["touch", "disconnect"]
 slots:
   slot1:
     name: "Esperto Wiimote mouse"
@@ -10,13 +8,12 @@ slots:
 accelerometer_calibration: [ 1.0014056, -0.011690015, 0.009826779, -0.02909683, 1.013545, 0.005751312, -0.010004735, -0.012316463, 0.99458194, 28.481918, 33.827446, 30.468597 ]
 screen_limits:
   north: -2000
-  south: 10355
+  south: 6569
   west: -300
   east: 4395
-#  north: 0
-#  south: 4095
-#  west: 0
-#  east: 4095
+parking:
+  !Axis ABS_X: 4095
+  !Axis ABS_Y: 4095
 esperto:
   modifiers:
     - name: pointer

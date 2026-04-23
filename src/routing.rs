@@ -8,8 +8,8 @@ use esperto::types::Kind;
 use evdevil::bits::BitSet;
 use evdevil::event::{Abs, EventKind, EventType, InputEvent, Key, KeyState};
 use evdevil::reader::AsyncEvents;
-use evdevil::uinput::{EventWriter, UinputDevice};
 use evdevil::{Evdev, EventReader};
+use frozen_collections::FzScalarMap;
 use futures::{StreamExt, stream};
 use nalgebra::vector;
 use std::collections::HashMap;
@@ -166,7 +166,12 @@ impl Raw {
    }
 }
 
-pub fn make_abs_stream<'a>(stream: AsyncEvents<'a>, syn: Raw) -> impl StreamExt<Item = Raw> + use<'a> + 'a {
+pub fn make_abs_stream<'a>(
+   stream: AsyncEvents<'a>,
+   syn: Raw,
+   stream_name: &'static str,
+   sysname: &'a str,
+) -> impl StreamExt<Item = Raw> + use<'a> + 'a {
    stream::unfold(stream, move |mut stream| async move {
       loop {
          break match stream.next_event().await {
@@ -179,7 +184,7 @@ pub fn make_abs_stream<'a>(stream: AsyncEvents<'a>, syn: Raw) -> impl StreamExt<
                stream,
             )),
             Err(e) => {
-               eprintln!("IR stream error: {:?}", e);
+               eprintln!("Device {sysname}: {stream_name} stream error: {:?}", e);
                None
             }
          };
@@ -187,10 +192,11 @@ pub fn make_abs_stream<'a>(stream: AsyncEvents<'a>, syn: Raw) -> impl StreamExt<
    })
 }
 
-fn combine_streams(
-   (key_stream, ir_stream, accel_stream): (AsyncEvents, AsyncEvents, AsyncEvents),
-) -> impl StreamExt<Item = Raw> {
-   let key_stream = stream::unfold(key_stream, |mut stream| async {
+fn combine_streams<'a>(
+   (key_stream, ir_stream, accel_stream): (AsyncEvents<'a>, AsyncEvents<'a>, AsyncEvents<'a>),
+   sysname: &'a str,
+) -> impl StreamExt<Item = Raw> + 'a {
+   let key_stream = stream::unfold(key_stream, move |mut stream| async move {
       loop {
          break match stream.next_event().await {
             Ok(event) => Some((
@@ -208,14 +214,14 @@ fn combine_streams(
                stream,
             )),
             Err(e) => {
-               eprintln!("Keys stream error: {:?}", e);
+               eprintln!("Device {sysname}: Keys stream error: {:?}", e);
                None
             }
          };
       }
    });
-   let accel_stream = make_abs_stream(accel_stream, Raw::AccelSyn);
-   let ir_stream = make_abs_stream(ir_stream, Raw::IRSyn);
+   let accel_stream = make_abs_stream(accel_stream, Raw::AccelSyn, "Accel", sysname);
+   let ir_stream = make_abs_stream(ir_stream, Raw::IRSyn, "IR", sysname);
    stream::select(accel_stream, stream::select(ir_stream, key_stream))
 }
 
@@ -270,14 +276,17 @@ impl DeviceMatcher {
             // println!("dev: {:?}, name: {:?}", d, name);
             match name.as_str() {
                "Nintendo Wii Remote" => {
+                  println!("Device {sysname}: Found Keys device");
                   self.add_key(dev, sysname.clone());
                   // self.key_device = Some(dev);
                }
                "Nintendo Wii Remote IR" => {
+                  println!("Device {sysname}: Found IR device");
                   self.add_ir(dev, sysname.clone());
                   // self.ir_device = Some(dev);
                }
                "Nintendo Wii Remote Accelerometer" => {
+                  println!("Device {sysname}: Found Accel device");
                   self.add_accel(dev, sysname.clone());
                   // self.accel_device = Some(dev);
                }
@@ -286,7 +295,7 @@ impl DeviceMatcher {
          })
          .map_or_else(
             |err| {
-               dprintln!(
+               println!(
                   "Info: Failed to open device: {}, with error: {:?}",
                   new_node.to_string_lossy(),
                   err
@@ -362,12 +371,24 @@ pub async fn device_handler(
    devices: (Evdev, Evdev, Evdev),
 ) -> Result<(), std::io::Error> {
    let mut readers = devices_into_readers(devices, config.grab).await?;
-   let stream = combine_streams((
-      readers.0.async_events()?,
-      readers.1.async_events()?,
-      readers.2.async_events()?,
-   ));
+   let stream = combine_streams(
+      (
+         readers.0.async_events()?,
+         readers.1.async_events()?,
+         readers.2.async_events()?,
+      ),
+      &sysname,
+   );
    tokio::pin!(stream);
+
+   let centering = FzScalarMap::new(
+      config
+         .centering
+         .iter()
+         .map(|(axis, value)| (axis.raw(), value))
+         .collect(),
+   );
+   let parking = FzScalarMap::new(config.parking.iter().map(|(axis, value)| (axis.raw(), value)).collect());
 
    let devs = config.build_devices()?;
    let mut writers = [None, None, None, None];
@@ -375,6 +396,8 @@ pub async fn device_handler(
    let mut handler = WiimoteComboHandler::new(&config.esperto);
 
    let mut tracker = SyncTracker::new(config);
+
+   println!("Device {sysname}: begin handling");
 
    while let Some(event) = stream.next().await {
       // let now = std::time::Instant::now();
@@ -408,6 +431,8 @@ pub async fn device_handler(
          if let Some(event) = match keycode.code {
             OutputCodes::Axis(abs) => match kind {
                Kind::AxisUpdate => Some(InputEvent::new(EventType::ABS, abs.raw(), value)),
+               Kind::AxisEngage => centering.get(&abs.raw()).map(|value| InputEvent::new(EventType::ABS, abs.raw(), **value)),
+               Kind::AxisDisengage => parking.get(&abs.raw()).map(|value| InputEvent::new(EventType::ABS, abs.raw(), **value)),
                _ => None,
             },
             OutputCodes::Key(key) => Some(InputEvent::new(
@@ -417,7 +442,8 @@ pub async fn device_handler(
             )),
             OutputCodes::CustomAxis(abs) => match kind {
                Kind::AxisUpdate => Some(InputEvent::new(EventType::ABS, abs, value)),
-
+               Kind::AxisEngage => centering.get(&abs).map(|value| InputEvent::new(EventType::ABS, abs, **value)),
+               Kind::AxisDisengage => parking.get(&abs).map(|value| InputEvent::new(EventType::ABS, abs, **value)),
                _ => None,
             },
             OutputCodes::CustomKey(key) => Some(InputEvent::new(
