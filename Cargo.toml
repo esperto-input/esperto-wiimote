@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
+description = "Advanced Wiimote remapping software"
 
 [lib]
 name = "proc_macros"

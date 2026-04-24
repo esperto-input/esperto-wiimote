@@ -43,9 +43,11 @@ struct Args {
 #[derive(Subcommand)]
 enum Subcommands {
    /// Accelerometer calibration wizard
+   ///
+   /// If a config file was specified, calibration data will be written to it
    Calibration {
       /// Maximum acceptable standard deviations for calibration readings
-      #[arg(short, long, value_name = "THRSs", default_value = "1.4")]
+      #[arg(short, long, value_name = "THRSH", default_value = "1.4")]
       standard_deviation_threshold: f32,
       /// Higher weights are best for biased sensor, lower weights for misaligned sensors
       #[arg(short, long, value_name = "WEIGH", default_value = "500.0")]
@@ -63,7 +65,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       serde_yaml::from_str(include_str!("default.yaml"))?
    };
    config.validate()?;
-   serde_yaml::to_writer(File::create("default.yaml")?, &config)?;
    let config = Rc::new(config);
    let counter = Rc::new(RefCell::new(0));
    let calibration_mode = matches!(args.subcommand, Some(Subcommands::Calibration { .. }));
