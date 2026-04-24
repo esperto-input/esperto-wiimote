@@ -1,19 +1,21 @@
 # Esperto Wiimote
 
-Based on the [esperto](https://github.com/KayJay7/esperto) input system, `esperto-wiimote` is probably the 
+Based on the [esperto](https://github.com/KayJay7/esperto) input system, `esperto-wiimote` is probably the
 most advanced Wiimote mapping available. It features precise accelerometer calibration,
 advanced IR tracking, and full remapping options, with full "key combos" support. And all of that
 at virtually no additional latency, mostly only limited by speed of the kernel's evdev/uinput api itself.
 
 The IR tracking algorithm is a rewrite [this](https://gist.github.com/marcan/c7ca900d5191610957c478bbdbb516c0)
-algorithm from Hector Martin, included for reference in this repository.
+algorithm from Hector Martin, included for reference [in this repository](https://github.com/KayJay7/esperto-wiimote/tree/master/reference).
 
 This software requires a custom Wiimote kernel driver found [here](https://github.com/dkosmari/hid-wiimote-plus).
+
+Available on [crates.io](https://crates.io/)!
 
 ## Configuration options
 
 The configuration file is specified with the `--config <FILE>` command line argument. If unspecified,
-the program will follow a media-oriented-remote default available at `src/default.yaml` in this repo.
+the program will follow a media-oriented-remote default available at [`src/default.yaml`](https://github.com/KayJay7/esperto-wiimote/blob/master/src/default.yaml) in this repo.
 
 Here an example of configuration with descriptions of the available options.
 
@@ -22,10 +24,10 @@ Here an example of configuration with descriptions of the available options.
 grab: false
 # Command to run when the first device is connected, as list of arguments
 # Useful for turning on the sensor bar
-on_connect: ["echo", "hello", "world"]
+on_connect: [ "echo", "hello", "world" ]
 # Command to run when all devices are disconnected, as list of arguments
 # Useful for turning off the sensor bar
-on_disconnect: ["echo", "goodbye", "world"]
+on_disconnect: [ "echo", "goodbye", "world" ]
 # Options for the output device slot. There's four slots from `slot1` to `slot2` for each Wiimote
 # slots are useful to separate mouse inputs from keyboard inputs from joysticks
 slots:
@@ -37,7 +39,7 @@ slots:
     # Whether the device should autorepeat held keys, this might get overruled by the compositor
     repeating: true
 # Accelerometer calibration data generated with the `esperto-wiimote calibration` command
-accelerometer_calibration: [ 
+accelerometer_calibration: [
   1.0014056, -0.011690015, 0.009826779,
   -0.02909683, 1.013545, 0.005751312,
   -0.010004735, -0.012316463, 0.99458194,
@@ -104,7 +106,7 @@ Some tuning options can be provided as arguments if necessary.
 
 It is highly encouraged to calibrate the sensor before using the software, as the accelerometer will be entirely
 unreliable otherwise. It is suggested to calibrate after the remote has reached its normal operating temperature.
-Remember that the sensor readings will drift slightly overtime and with temperature changes, but 
+Remember that the sensor readings will drift slightly overtime and with temperature changes, but
 recalibration won't likely be necessary, as the software accounts for drift.
 
 ## Roadmap

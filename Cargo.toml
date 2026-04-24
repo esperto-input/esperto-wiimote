@@ -5,6 +5,8 @@ edition = "2024"
 license = "MIT"
 readme = "README.md"
 description = "Advanced Wiimote remapping software"
+homepage = "https://github.com/KayJay7/esperto-wiimote"
+repository = "https://github.com/KayJay7/esperto-wiimote.git"
 
 [lib]
 name = "proc_macros"
