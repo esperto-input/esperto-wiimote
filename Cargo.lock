@@ -220,18 +220,32 @@ dependencies = [
 
 [[package]]
 name = "esperto"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c889a1fdd0be3c588e786c6b455768d8860c4ea2e515d4f88d08badf4d0a25d9"
+checksum = "f60b4e4fcc847523397a2167d3b4115c57d0fb97f91eaeea4fcda8f1d36b7f93"
 dependencies = [
+ "esperto-macros",
  "frozen-collections",
  "serde",
  "tinyset",
 ]
 
 [[package]]
+name = "esperto-macros"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ce3a18608497e441b3612480633dbc915f6e2aeb40c5165511ca9b8ff11f508"
+dependencies = [
+ "frozen-collections-core",
+ "proc-macro-error2",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "esperto-wiimote"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "const_format",
@@ -279,7 +293,6 @@ checksum = "5d2ae70ff5b0de400d1f640f587aa39f2ee13b660125e26273fef78dbe8a39c5"
 dependencies = [
  "foldhash",
  "frozen-collections-core",
- "frozen-collections-macros",
  "rand 0.10.0",
  "rand_chacha 0.10.0",
 ]
@@ -299,16 +312,6 @@ dependencies = [
  "quote",
  "serde",
  "syn",
-]
-
-[[package]]
-name = "frozen-collections-macros"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e81abbab34eb5f41f096bc7d97fc61e0b5bc4cbe03989a950f0d1b4667b193f3"
-dependencies = [
- "frozen-collections-core",
- "proc-macro-error2",
 ]
 
 [[package]]
@@ -838,6 +841,7 @@ dependencies = [
  "proc-macro-error-attr2",
  "proc-macro2",
  "quote",
+ "syn",
 ]
 
 [[package]]

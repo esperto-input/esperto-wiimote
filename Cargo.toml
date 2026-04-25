@@ -1,6 +1,6 @@
 [package]
 name = "esperto-wiimote"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
@@ -15,7 +15,7 @@ proc-macro = true
 
 [dependencies]
 crossterm = { version = "0.29.0", default-features = false, features = ["events", "event-stream"] }
-esperto = { version = "0.6.1", features = ["serde"] }
+esperto = { version = "0.6.2", features = ["serde", "macros"] }
 tokio = { version = "1.51.0", features = ["macros", "rt", "signal"] }
 evdevil = { version = "0.4.1", features = ["tokio", "serde"] }
 tokio-udev = "0.10.0"
@@ -27,7 +27,7 @@ ordered-float = "5.3.0"
 syn = { version = "2.0", default-features = false }
 quote = { version = "1.0", default-features = false }
 proc-macro2 = "1.0.106"
-frozen-collections = "0.9.1"
+frozen-collections = { version = "0.9.1", default-features = false, features = ["std"] }
 clap = { version = "4.6.1", features = ["derive"] }
 serde_yaml = "0.9.34"
 nalgebra = "0.34.2"
