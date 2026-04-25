@@ -220,9 +220,9 @@ dependencies = [
 
 [[package]]
 name = "esperto"
-version = "0.6.2"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f60b4e4fcc847523397a2167d3b4115c57d0fb97f91eaeea4fcda8f1d36b7f93"
+checksum = "b4c201e232e58b99d0152a5bd13e3548f33d9384da54a51c64875bd000be8174"
 dependencies = [
  "esperto-macros",
  "frozen-collections",
@@ -232,9 +232,9 @@ dependencies = [
 
 [[package]]
 name = "esperto-macros"
-version = "0.6.2"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ce3a18608497e441b3612480633dbc915f6e2aeb40c5165511ca9b8ff11f508"
+checksum = "e2012d1d98f6cf04eacb80239e40737f7f98e4886071c388703bd527b779d5db"
 dependencies = [
  "frozen-collections-core",
  "proc-macro-error2",
@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "esperto-wiimote"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "const_format",

@@ -1,6 +1,6 @@
 [package]
 name = "esperto-wiimote"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
@@ -15,7 +15,7 @@ proc-macro = true
 
 [dependencies]
 crossterm = { version = "0.29.0", default-features = false, features = ["events", "event-stream"] }
-esperto = { version = "0.6.2", features = ["serde", "macros"] }
+esperto = { version = "0.7.0", features = ["serde", "macros"] }
 tokio = { version = "1.51.0", features = ["macros", "rt", "signal"] }
 evdevil = { version = "0.4.1", features = ["tokio", "serde"] }
 tokio-udev = "0.10.0"
