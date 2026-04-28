@@ -1,11 +1,12 @@
 # Esperto Wiimote
 
+> [!IMPORTANT]
+> This software requires an updated/fixed Wiimote kernel driver found [here](https://github.com/dkosmari/hid-wiimote-plus).
+
 Based on the [esperto](https://github.com/KayJay7/esperto) input system, `esperto-wiimote` is an advanced Wiimote mapper. It features precise accelerometer calibration,
 good IR tracking, and powerful remapping options, with combos support. It adds virtually no latency, mostly dominated by the kernel's evdev/uinput api itself.
 
 This program features a port++ of Hector Martin's 2-point IR tracking [algorithm](https://gist.github.com/marcan/c7ca900d5191610957c478bbdbb516c0), [bundled](https://github.com/KayJay7/esperto-wiimote/tree/master/reference) for reference.
-
-This software requires an updated/fixed Wiimote kernel driver found [here](https://github.com/dkosmari/hid-wiimote-plus).
 
 Available on [crates.io](https://crates.io/crates/esperto-wiimote).
 
