@@ -2,6 +2,8 @@
 
 > [!IMPORTANT]
 > This software requires an updated/fixed Wiimote kernel driver found [here](https://github.com/dkosmari/hid-wiimote-plus).
+> 
+> After installation, run `sudo sed -i '/ATTR{inhibited}="1"/s/^/#/' /etc/udev/rules.d/99-wiimote.rules` to un-inhibit IR and accelerometer events.
 
 Based on the [esperto](https://github.com/KayJay7/esperto) input system, `esperto-wiimote` is an advanced Wiimote mapper. It features precise accelerometer calibration,
 good IR tracking, and powerful remapping options, with combos support. It adds virtually no latency, mostly dominated by the kernel's evdev/uinput api itself.
