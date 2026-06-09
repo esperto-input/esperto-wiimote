@@ -8,5 +8,7 @@ on:
 
 jobs:
   shared-ci:
+    permissions:
+      contents: write
     uses: esperto-input/.github/.github/workflows/release.yml@master
     secrets: inherit
