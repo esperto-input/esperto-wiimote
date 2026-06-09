@@ -255,12 +255,25 @@ impl DeviceMatcher {
    }
 
    pub fn new_device(&mut self, device: Device) -> Option<(String, Evdev, Evdev, Evdev)> {
-      if let (Some(dev_node), Some(Some(sysname))) = (
+      if let (Some(dev_node), Some((sysname, vendor, product))) = (
          device.devnode(),
-         device
-            .parent()
-            .map(|d| d.parent().map(|d| d.sysname().to_string_lossy().to_string())),
-      ) {
+         device.parent().and_then(|d1| {
+            let parent = d1.parent();
+            let vendor = d1.attribute_value("id/vendor");
+            let product = d1.attribute_value("id/product");
+            if let (Some(parent), Some(vendor), Some(product)) = (parent, vendor, product) {
+               Some((
+                  parent.sysname().to_string_lossy().to_string(),
+                  vendor.to_string_lossy().to_string(),
+                  product.to_string_lossy().to_string(),
+               ))
+            } else {
+               None
+            }
+         }),
+      ) && vendor == "057e"
+         && (product == "0306" || product == "0330")
+      {
          dprintln!("sysname: {:?}", sysname);
          // Now use your existing evdev logic to open it
          return self.update(dev_node, sysname);
@@ -272,8 +285,6 @@ impl DeviceMatcher {
       let devices = Evdev::open(new_node)
          .and_then(|dev| dev.name().map(|name| (dev, name)))
          .map(|(dev, name)| {
-            // let d = Device::from_syspath(new_node).map(|d| d.devpath().to_owned());
-            // println!("dev: {:?}, name: {:?}", d, name);
             match name.as_str() {
                "Nintendo Wii Remote" => {
                   println!("Device {sysname}: Found Keys device");
@@ -431,8 +442,12 @@ pub async fn device_handler(
          if let Some(event) = match keycode.code {
             OutputCodes::Axis(abs) => match kind {
                Kind::AxisUpdate => Some(InputEvent::new(EventType::ABS, abs.raw(), value)),
-               Kind::AxisEngage => centering.get(&abs.raw()).map(|value| InputEvent::new(EventType::ABS, abs.raw(), **value)),
-               Kind::AxisDisengage => parking.get(&abs.raw()).map(|value| InputEvent::new(EventType::ABS, abs.raw(), **value)),
+               Kind::AxisEngage => centering
+                  .get(&abs.raw())
+                  .map(|value| InputEvent::new(EventType::ABS, abs.raw(), **value)),
+               Kind::AxisDisengage => parking
+                  .get(&abs.raw())
+                  .map(|value| InputEvent::new(EventType::ABS, abs.raw(), **value)),
                _ => None,
             },
             OutputCodes::Key(key) => Some(InputEvent::new(
@@ -442,8 +457,12 @@ pub async fn device_handler(
             )),
             OutputCodes::CustomAxis(abs) => match kind {
                Kind::AxisUpdate => Some(InputEvent::new(EventType::ABS, abs, value)),
-               Kind::AxisEngage => centering.get(&abs).map(|value| InputEvent::new(EventType::ABS, abs, **value)),
-               Kind::AxisDisengage => parking.get(&abs).map(|value| InputEvent::new(EventType::ABS, abs, **value)),
+               Kind::AxisEngage => centering
+                  .get(&abs)
+                  .map(|value| InputEvent::new(EventType::ABS, abs, **value)),
+               Kind::AxisDisengage => parking
+                  .get(&abs)
+                  .map(|value| InputEvent::new(EventType::ABS, abs, **value)),
                _ => None,
             },
             OutputCodes::CustomKey(key) => Some(InputEvent::new(

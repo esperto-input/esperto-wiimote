@@ -1,12 +1,12 @@
 use crate::points::Vec3;
 use crate::print_utils;
 use crate::print_utils::calibration_pane;
-use crate::routing::{make_abs_stream, Raw, SyncAccelEvents};
+use crate::routing::{Raw, SyncAccelEvents, make_abs_stream};
 use crate::stats::TWEMA;
 use crossterm::event;
 use evdevil::Evdev;
 use futures::StreamExt;
-use nalgebra::{matrix, vector, Matrix3x4, Matrix4x3, SMatrix};
+use nalgebra::{Matrix3x4, Matrix4x3, SMatrix, matrix, vector};
 use std::time::{Duration, Instant};
 
 #[repr(usize)]

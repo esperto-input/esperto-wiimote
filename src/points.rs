@@ -1,4 +1,4 @@
-use nalgebra::{vector, Vector2, Vector3};
+use nalgebra::{Vector2, Vector3, vector};
 
 pub type Dot = Vector2<f32>;
 

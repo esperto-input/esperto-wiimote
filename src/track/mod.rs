@@ -3,14 +3,13 @@ use crate::config::{Config, SensorBarSize, Smoothing};
 use crate::points::Vec3;
 use crate::points::{Dot, DotLike};
 use crate::print_utils::{acc_pane, sensorbar_pane, smooth_pane};
-use nalgebra::{vector, Matrix3x4};
+use crate::stats::{TWBEMA, WEMAV};
+use nalgebra::{Matrix3x4, vector};
 use ordered_float::OrderedFloat;
 use proc_macros::process;
 use std::time::Instant;
 pub use types::RawDot;
-use types::{square, BarDotGuess, IRState,
-            SensorBar};
-use crate::stats::{TWBEMA, WEMAV};
+use types::{BarDotGuess, IRState, SensorBar, square};
 
 mod types;
 
@@ -18,7 +17,7 @@ mod types;
 struct ACC {
    gravity: WEMAV,
    smoothed: TWBEMA<Vec3>, // you cannot average an angle, but you can average coordinates
-   roll: f32,             // roll from accelerometer (rotation) in radians
+   roll: f32,              // roll from accelerometer (rotation) in radians
    corrected: Dot,
    calibration: Matrix3x4<f32>,
 }
@@ -243,7 +242,7 @@ impl IR {
             );
             sensorbar_pane::single_adjust!(guess.i, guess.closest);
             self.sensorbar = new_sb;
-         }  else {
+         } else {
             irprintln!("IR: adjust skipped");
             #[allow(unused_variables)]
             let (i, dot) = self.find_edge_dot(raw_dots);
@@ -409,4 +408,3 @@ const DIST_THRESHOLD: f32 = 0.15;
 // acceleration threshold at which rotation readings are almost capped
 // in units of gravity
 const ACCELERATION_THRESHOLD: f32 = 0.13;
-

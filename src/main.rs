@@ -49,7 +49,8 @@ enum Subcommands {
       /// Maximum acceptable standard deviations for calibration readings
       #[arg(short, long, value_name = "THRSH", default_value = "1.4")]
       standard_deviation_threshold: f32,
-      /// Higher weights are best for biased sensor, lower weights for misaligned sensors
+      /// Higher weights are best for biased sensor, lower weights for
+      /// misaligned sensors
       #[arg(short, long, value_name = "WEIGH", default_value = "500.0")]
       weight: f32,
    },
@@ -71,15 +72,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
    let handle = tokio::task::spawn_local(main_loop(args, config.clone(), counter.clone()));
 
-   if ! calibration_mode {
+   if !calibration_mode {
       let ctrlc = signal::ctrl_c();
       let mut sigterm = signal::unix::signal(SignalKind::terminate())?;
       let sigterm = sigterm.recv();
       match tokio::select! {
-      err = ctrlc => err,
-      _ = sigterm => Ok(())
+         err = ctrlc => err,
+         _ = sigterm => Ok(())
 
-   } {
+      } {
          Ok(_) => {
             if *counter.borrow() > 0 {
                on_disconnect(&config);
@@ -144,7 +145,8 @@ async fn main_loop(
             weight,
          }) = args.subcommand
          {
-            let affine_matrix = calibration::calibrate(accel_device, &name, standard_deviation_threshold, weight).await?;
+            let affine_matrix =
+               calibration::calibrate(accel_device, &name, standard_deviation_threshold, weight).await?;
             let accelerometer_calibration: [f32; 12] = *affine_matrix.as_slice().as_array().unwrap();
             if let Some(file) = args.config {
                let config: &mut Config = Rc::make_mut(&mut config);

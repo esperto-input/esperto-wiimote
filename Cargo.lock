@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "esperto-wiimote"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "clap",
  "const_format",

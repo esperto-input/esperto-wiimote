@@ -1,9 +1,6 @@
 use crate::irprintln;
 use crate::points::{Dot, DotLike};
-use crate::track::{
-   MAX_SB_SLOPE, MIN_SB_WIDTH
-   ,
-};
+use crate::track::{MAX_SB_SLOPE, MIN_SB_WIDTH};
 use nalgebra::vector;
 use ordered_float::OrderedFloat;
 use std::cmp::{max_by_key, min};
@@ -97,7 +94,7 @@ impl SensorBar {
       dots
          .iter()
          .enumerate()
-         .map(|( i, dot)| {
+         .map(|(i, dot)| {
             let (dist2, closest) = min(
                (OrderedFloat(dot.distance2(self.left())), 0usize),
                (OrderedFloat(dot.distance2(self.right())), 1usize),
@@ -123,7 +120,8 @@ impl SensorBar {
    }
 
    pub fn bounds_check(&self, off_angle: f32, dot: &Dot, sensorbar_size: &SensorBarSize) -> bool {
-      let margin = vector![sensorbar_size.cluster_width, sensorbar_size.cluster_height,] / 2.0 / sensorbar_size.width * self.offset().x;
+      let margin = vector![sensorbar_size.cluster_width, sensorbar_size.cluster_height,] / 2.0 / sensorbar_size.width
+         * self.offset().x;
       let flat_dot = dot.rotate(off_angle);
       let nw = self.flat_left() + margin;
       let se = self.flat_right() - margin;
@@ -187,5 +185,5 @@ macro_rules! square {
    };
 }
 
-pub(crate) use square;
 use crate::config::SensorBarSize;
+pub(crate) use square;

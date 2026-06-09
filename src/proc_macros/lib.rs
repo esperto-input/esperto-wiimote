@@ -102,16 +102,9 @@ pub fn process(attr: TokenStream, item: TokenStream) -> TokenStream {
    let attr_tokens = TokenStream2::from(attr);
 
    // Perform deep recursive replacement
-   let new_init_tokens = replace_ident_recursive(
-      attr_tokens,
-      &input_const.ident,
-      &input_const.expr,
-      &input_const.ty,
-   );
+   let new_init_tokens = replace_ident_recursive(attr_tokens, &input_const.ident, &input_const.expr, &input_const.ty);
 
    // Update the constant's expression
    input_const.expr = syn::parse2(new_init_tokens).expect("Generated invalid expression");
    input_const.to_token_stream().into()
 }
-
-
